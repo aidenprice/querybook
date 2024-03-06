@@ -1,32 +1,29 @@
 from typing import Tuple, Union
-from flask_login import current_user
 
 from app.auth.permission import (
-    verify_query_engine_environment_permission,
-    verify_environment_permission,
-    verify_metastore_permission,
+    verify_data_column_permission,
     verify_data_schema_permission,
     verify_data_table_permission,
-    verify_data_column_permission,
+    verify_environment_permission,
+    verify_metastore_permission,
+    verify_query_engine_environment_permission,
 )
+from app.datasource import admin_only, api_assert, register, with_impression
 from app.db import DBSession
-from app.datasource import register, api_assert, with_impression, admin_only
 from app.flask_app import cache, limiter
+from const.datasources import RESOURCE_NOT_FOUND_STATUS_CODE
 from const.impression import ImpressionItemType
-from const.metastore import DataTableWarningSeverity
+from const.metastore import DataTableWarningSeverity, MetadataType
 from const.time import seconds_in_a_day
+from flask_login import current_user
 from lib.lineage.utils import lineage
-from lib.metastore.utils import DataTableFinder
 from lib.metastore import get_metastore_loader
+from lib.metastore.utils import DataTableFinder
 from lib.query_analysis.samples import make_samples_query
 from lib.utils import mysql_cache
-from logic import metastore as logic
 from logic import admin as admin_logic
-from models.metastore import (
-    DataTableWarning,
-    DataTableStatistics,
-    DataTableColumnStatistics,
-)
+from logic import metastore as logic
+from models.metastore import DataTableStatistics, DataTableWarning
 from tasks.run_sample_query import run_sample_query
 
 
@@ -35,7 +32,8 @@ def get_all_query_metastores(
     environment_id,
 ):
     verify_environment_permission([environment_id])
-    return admin_logic.get_all_query_metastore_by_environment(environment_id)
+    metastores = admin_logic.get_all_query_metastore_by_environment(environment_id)
+    return [m.to_dict(with_flags=True) for m in metastores]
 
 
 @register("/schema/<int:schema_id>/", methods=["PUT"])
@@ -75,11 +73,30 @@ def get_table(table_id, with_schema=True, with_column=True, with_warnings=True):
         api_assert(
             table,
             "Table doesn't exist or has been deleted from Metastore",
-            status_code=404,
+            status_code=RESOURCE_NOT_FOUND_STATUS_CODE,
         )
         verify_data_schema_permission(table.schema_id, session=session)
         result = table.to_dict(with_schema, with_column, with_warnings)
         return result
+
+
+@register("/table/<int:table_id>/metastore_link/", methods=["GET"])
+def get_table_metastore_link(
+    table_id,
+    metadata_type,
+):
+    verify_data_table_permission(table_id)
+
+    table = logic.get_table_by_id(table_id)
+    schema = table.data_schema
+    metastore_id = schema.metastore_id
+    metastore_loader = get_metastore_loader(metastore_id)
+
+    return metastore_loader.get_table_metastore_link(
+        metadata_type=MetadataType(metadata_type),
+        schema_name=schema.name,
+        table_name=table.name,
+    )
 
 
 @register("/table_name/<schema_name>/<table_name>/", methods=["GET"])
@@ -246,6 +263,13 @@ def get_columns_from_table(table_id):
         return logic.get_column_by_table_id(table_id, session=session)
 
 
+@register("/table/<int:table_id>/detailed_column/", methods=["GET"])
+def get_detailed_columns_from_table(table_id):
+    with DBSession() as session:
+        verify_data_table_permission(table_id, session=session)
+        return logic.get_detailed_columns_dict_by_table_id(table_id, session=session)
+
+
 @register("/table/<int:table_id>/raw_samples_query/", methods=["GET"])
 def get_table_samples_raw_query(
     table_id,
@@ -353,13 +377,11 @@ def get_column_by_table(table_id, column_name, with_table=False):
 
 
 @register("/column/<int:column_id>/", methods=["GET"])
+@limiter.limit("120 per minute")
 def get_column(column_id, with_table=False):
-    with DBSession() as session:
-        column = logic.get_column_by_id(column_id, session=session)
-        verify_data_table_permission(column.table_id, session=session)
-        column_dict = column.to_dict(with_table)
-
-        return column_dict
+    column = logic.get_column_by_id(column_id)
+    verify_data_table_permission(column.table_id)
+    return logic.get_detailed_column_dict(column, with_table=with_table)
 
 
 @register("/column/<int:column_id>/", methods=["PUT"])
@@ -533,68 +555,6 @@ def create_table_stats(data):
                     uid=current_user.id,
                     session=session,
                 )
-    return
-
-
-@register("/column/stats/<int:column_id>/", methods=["GET"])
-def get_table_column_stats(column_id):
-    """Get all table stats column by id"""
-    with DBSession() as session:
-        column = logic.get_column_by_id(column_id, session=session)
-        verify_data_table_permission(column.table_id, session=session)
-        return DataTableColumnStatistics.get_all(column_id=column_id, session=session)
-
-
-@register("/column/stats/<metastore_name>/", methods=["POST"])
-def create_table_column_stats_by_name(metastore_name, data):
-    """Batch add/update table column stats"""
-    # TODO: verify user is a service account
-    with DBSession() as session:
-        metastore = admin_logic.get_query_metastore_by_name(
-            metastore_name, session=session
-        )
-        api_assert(metastore, "Invalid metastore")
-        verify_metastore_permission(metastore.id, session=session)
-
-        with DataTableFinder(metastore.id) as t_finder:
-            for d in data:
-                column = t_finder.get_table_column_by_name(
-                    schema_name=d["schema_name"],
-                    table_name=d["table_name"],
-                    column_name=d["column_name"],
-                    session=session,
-                )
-
-                if column is not None:
-                    for s in d["stats"]:
-                        logic.upsert_table_column_stat(
-                            column_id=column.id,
-                            key=s["key"],
-                            value=s["value"],
-                            uid=current_user.id,
-                            session=session,
-                        )
-    return
-
-
-@register("/column/stats/", methods=["POST"])
-def create_table_column_stats(data):
-    """Batch add/update table column stats"""
-    # TODO: verify user is a service account
-    with DBSession() as session:
-
-        for d in data:
-            column = logic.get_column_by_id(d["column_id"], session=session)
-            if column:
-                verify_data_table_permission(column.table_id, session=session)
-                for s in d["stats"]:
-                    logic.upsert_table_column_stat(
-                        column_id=d["column_id"],
-                        key=s["key"],
-                        value=s["value"],
-                        uid=current_user.id,
-                        session=session,
-                    )
     return
 
 

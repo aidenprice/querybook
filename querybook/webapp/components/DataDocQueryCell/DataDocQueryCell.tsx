@@ -8,7 +8,9 @@ import React from 'react';
 import toast from 'react-hot-toast';
 import { connect } from 'react-redux';
 
+import { QueryGenerationButton } from 'components/AIAssistant/QueryGenerationButton';
 import { DataDocQueryExecutions } from 'components/DataDocQueryExecutions/DataDocQueryExecutions';
+import { QueryCellTitle } from 'components/QueryCellTitle/QueryCellTitle';
 import { runQuery, transformQuery } from 'components/QueryComposer/RunQuery';
 import { BoundQueryEditor } from 'components/QueryEditor/BoundQueryEditor';
 import { IQueryEditorHandles } from 'components/QueryEditor/QueryEditor';
@@ -21,8 +23,12 @@ import { QuerySnippetInsertionModal } from 'components/QuerySnippetInsertionModa
 import { TemplatedQueryView } from 'components/TemplateQueryView/TemplatedQueryView';
 import { TranspileQueryModal } from 'components/TranspileQueryModal/TranspileQueryModal';
 import { UDFForm } from 'components/UDFForm/UDFForm';
-import { IDataQueryCellMeta } from 'const/datadoc';
+import { ComponentType, ElementType } from 'const/analytics';
+import { IDataQueryCellMeta, TDataDocMetaVariables } from 'const/datadoc';
 import type { IQueryEngine, IQueryTranspiler } from 'const/queryEngine';
+import { SurveySurfaceType } from 'const/survey';
+import { triggerSurvey } from 'hooks/ui/useSurveyTrigger';
+import { trackClick } from 'lib/analytics';
 import CodeMirror from 'lib/codemirror';
 import { createSQLLinter } from 'lib/codemirror/codemirror-lint';
 import {
@@ -35,6 +41,7 @@ import { getPossibleTranspilers } from 'lib/templated-query/transpile';
 import { enableResizable } from 'lib/utils';
 import { getShortcutSymbols, KeyMap, matchKeyPress } from 'lib/utils/keyboard';
 import { doesLanguageSupportUDF } from 'lib/utils/udf';
+import * as dataDocActions from 'redux/dataDoc/action';
 import * as dataSourcesActions from 'redux/dataSources/action';
 import { setSidebarTableId } from 'redux/querybookUI/action';
 import {
@@ -49,7 +56,6 @@ import { Dropdown } from 'ui/Dropdown/Dropdown';
 import { Icon } from 'ui/Icon/Icon';
 import { IListMenuItem, ListMenu } from 'ui/Menu/ListMenu';
 import { Modal } from 'ui/Modal/Modal';
-import { ResizableTextArea } from 'ui/ResizableTextArea/ResizableTextArea';
 import { AccentText } from 'ui/StyledText/StyledText';
 
 import { ISelectedRange } from './common';
@@ -73,7 +79,7 @@ interface IOwnProps {
     cellId: number;
 
     queryIndexInDoc: number;
-    templatedVariables: Record<string, string>;
+    templatedVariables: TDataDocMetaVariables;
 
     shouldFocus: boolean;
     isFullScreen: boolean;
@@ -88,7 +94,6 @@ interface IOwnProps {
     onBlur?: () => any;
     onUpKeyPressed?: () => any;
     onDownKeyPressed?: () => any;
-    onDeleteKeyPressed?: () => any;
     toggleFullScreen: () => any;
 }
 type IProps = IOwnProps & StateProps & DispatchProps;
@@ -97,12 +102,14 @@ interface IState {
     query: string;
     meta: IDataQueryCellMeta;
 
+    modifiedAt: number;
     focused: boolean;
     selectedRange: ISelectedRange;
     queryCollapsedOverride: boolean;
     showQuerySnippetModal: boolean;
     showRenderedTemplateModal: boolean;
     showUDFModal: boolean;
+    hasLintError: boolean;
 
     transpilerConfig?: {
         toEngine: IQueryEngine;
@@ -120,12 +127,14 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
         this.state = {
             query: props.query,
             meta: props.meta,
+            modifiedAt: 0,
             focused: false,
             selectedRange: null,
             queryCollapsedOverride: null,
             showQuerySnippetModal: false,
             showRenderedTemplateModal: false,
             showUDFModal: false,
+            hasLintError: false,
         };
     }
 
@@ -192,7 +201,6 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
     public _keyMapMemo(engines: IQueryEngine[]) {
         const keyMap = {
             [KeyMap.queryEditor.runQuery.key]: this.clickOnRunButton,
-            [KeyMap.queryEditor.deleteCell.key]: this.props.onDeleteKeyPressed,
         };
 
         for (const [index, engine] of engines.entries()) {
@@ -262,9 +270,19 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
         }
     }
 
+    @bind
+    public onLintCompletion(hasError: boolean) {
+        this.setState({
+            hasLintError: hasError,
+        });
+    }
+
     @decorate(memoizeOne)
-    public createGetLintAnnotations(engineId: number) {
-        return createSQLLinter(engineId);
+    public createGetLintAnnotations(
+        engineId: number,
+        templatedVariables: TDataDocMetaVariables
+    ) {
+        return createSQLLinter(engineId, templatedVariables);
     }
 
     @bind
@@ -327,13 +345,25 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
     }
 
     @bind
-    public handleChange(query: string) {
+    public handleChange(query: string, run: boolean = false) {
         this.setState(
             {
                 query,
+                modifiedAt: Date.now(),
             },
-            () => this.onChangeDebounced({ context: query })
+            () => {
+                this.onChangeDebounced({ context: query });
+                if (run) {
+                    this.clickOnRunButton();
+                }
+            }
         );
+    }
+
+    @bind
+    public async forceSaveQuery() {
+        this.props.onChange({ context: this.state.query });
+        await this.props.forceSaveDataCell(this.props.cellId);
     }
 
     @bind
@@ -366,7 +396,7 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
 
     @bind
     public async getTransformedQuery() {
-        const { templatedVariables = {} } = this.props;
+        const { templatedVariables = [] } = this.props;
         const { query } = this.state;
         const selectedRange =
             this.queryEditorRef.current &&
@@ -383,22 +413,45 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
 
     @bind
     public async onRunButtonClick() {
+        trackClick({
+            component: ComponentType.DATADOC_QUERY_CELL,
+            element: ElementType.RUN_QUERY_BUTTON,
+            aux: {
+                lintError: this.state.hasLintError,
+            },
+        });
         return runQuery(
             await this.getTransformedQuery(),
             this.engineId,
-            async (query, engineId) =>
-                (
+            async (query, engineId) => {
+                const queryId = (
                     await this.props.createQueryExecution(
                         query,
                         engineId,
                         this.props.cellId
                     )
-                ).id
+                ).id;
+
+                // Only trigger survey if the query is modified within 5 minutes
+                if (Date.now() - this.state.modifiedAt < 5 * 60 * 1000) {
+                    triggerSurvey(SurveySurfaceType.QUERY_AUTHORING, {
+                        query_execution_id: queryId,
+                        cell_id: this.props.cellId,
+                    });
+                }
+
+                return queryId;
+            }
         );
     }
 
     @bind
     public formatQuery(options = {}) {
+        trackClick({
+            component: ComponentType.DATADOC_QUERY_CELL,
+            element: ElementType.FORMAT_BUTTON,
+            aux: options,
+        });
         if (this.queryEditorRef.current) {
             this.queryEditorRef.current.formatQuery(options);
         }
@@ -625,20 +678,23 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
 
     public renderCellHeaderDOM() {
         const {
+            docId,
+            cellId,
             queryEngines,
             queryEngineById,
 
             isEditable,
         } = this.props;
-        const { meta, selectedRange } = this.state;
+        const { meta, query, selectedRange } = this.state;
 
         const queryTitleDOM = isEditable ? (
-            <ResizableTextArea
+            <QueryCellTitle
+                cellId={cellId}
                 value={meta.title}
                 onChange={this.handleMetaTitleChange}
-                transparent
                 placeholder={this.defaultCellTitle}
-                className="Title"
+                query={query}
+                forceSaveQuery={this.forceSaveQuery}
             />
         ) : (
             <span className="p8">{this.dataCellTitle}</span>
@@ -705,6 +761,18 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
 
         const editorDOM = !queryCollapsed && (
             <div className="editor">
+                <QueryGenerationButton
+                    dataCellId={cellId}
+                    query={query}
+                    engineId={this.engineId}
+                    onUpdateQuery={this.handleChange}
+                    queryEngineById={queryEngineById}
+                    queryEngines={this.props.queryEngines}
+                    onUpdateEngineId={this.handleMetaChange.bind(
+                        this,
+                        'engine'
+                    )}
+                />
                 <BoundQueryEditor
                     value={query}
                     lineWrapping={true}
@@ -722,9 +790,13 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
                     onFullScreen={this.props.toggleFullScreen}
                     getLintErrors={
                         this.hasQueryValidators
-                            ? this.createGetLintAnnotations(this.engineId)
+                            ? this.createGetLintAnnotations(
+                                  this.engineId,
+                                  this.props.templatedVariables
+                              )
                             : null
                     }
+                    onLintCompletion={this.onLintCompletion}
                 />
                 {openSnippetDOM}
             </div>
@@ -747,6 +819,7 @@ class DataDocQueryCellComponent extends React.PureComponent<IProps, IState> {
                     templatedVariables={templatedVariables}
                     engineId={this.engineId}
                     onRunQueryClick={this.handleRunFromRenderedTemplateModal}
+                    hasValidator={this.hasQueryValidators}
                 />
             </Modal>
         ) : null;
@@ -918,6 +991,9 @@ function mapDispatchToProps(dispatch: Dispatch) {
         ) => dispatch(createQueryExecution(query, engineId, cellId)),
 
         setTableSidebarId: (id: number) => dispatch(setSidebarTableId(id)),
+
+        forceSaveDataCell: (cellId: number) =>
+            dispatch(dataDocActions.forceSaveDataDocCell(cellId)),
     };
 }
 

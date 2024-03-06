@@ -1,24 +1,31 @@
 import datetime
-from models.admin import QueryEngineEnvironment
-from sqlalchemy import func, and_
-from sqlalchemy.orm import aliased
 
 from app.db import with_session
 from const.elasticsearch import ElasticsearchItem
+from const.metastore import DataOwner, DataTableWarningSeverity
+from lib.logger import get_logger
 from lib.sqlalchemy import update_model_fields
+from logic import data_element as data_element_logic
+from logic.user import get_user_by_name
+from models.admin import QueryEngineEnvironment
 from models.metastore import (
+    DataJobMetadata,
     DataSchema,
     DataTable,
-    DataTableInformation,
     DataTableColumn,
+    DataTableColumnStatistics,
+    DataTableInformation,
     DataTableOwnership,
-    DataJobMetadata,
     DataTableQueryExecution,
     DataTableStatistics,
-    DataTableColumnStatistics,
+    DataTableWarning,
 )
 from models.query_execution import QueryExecution
+from sqlalchemy import and_, func
+from sqlalchemy.orm import aliased
 from tasks.sync_elasticsearch import sync_elasticsearch
+
+LOG = get_logger(__file__)
 
 
 @with_session
@@ -70,7 +77,6 @@ def get_schema_by_id(schema_id, session=None):
 
 @with_session
 def update_schema(schema_id, description, session=None):
-
     schema = get_schema_by_id(schema_id, session=session)
 
     schema.description = description
@@ -196,6 +202,8 @@ def create_table(
     location=None,
     column_count=None,
     schema_id=None,
+    golden=False,
+    boost_score=1,
     commit=True,
     session=None,
 ):
@@ -214,6 +222,8 @@ def create_table(
         "location": location,
         "column_count": column_count,
         "schema_id": schema_id,
+        "golden": golden,
+        "boost_score": boost_score,
     }
 
     table = get_table_by_schema_id_and_name(schema_id, name, session=session)
@@ -267,6 +277,7 @@ def create_table_information(
     earliest_partitions=None,
     hive_metastore_description=None,
     partition_keys=[],
+    custom_properties=None,
     commit=False,
     session=None,
 ):
@@ -284,6 +295,7 @@ def create_table_information(
         earliest_partitions=earliest_partitions,
         hive_metastore_description=hive_metastore_description,
         column_info=column_infomation,
+        custom_properties=custom_properties,
     )
 
     # The reason that we dont add description direclty in
@@ -307,6 +319,37 @@ def create_table_information(
     session.refresh(table_information)
 
     return table_information
+
+
+@with_session
+def create_table_warnings(
+    table_id,
+    warnings: tuple[DataTableWarningSeverity, str] = [],
+    commit=False,
+    session=None,
+):
+    """This function is used for loading table warnings from metastore.
+
+    For warnings from metastore, created_by will be None.
+    """
+    # delete all warnings without created_by from the table
+    session.query(DataTableWarning).filter_by(
+        table_id=table_id, created_by=None
+    ).delete()
+
+    # add warnings from metastore to the table
+    for severity, message in warnings:
+        DataTableWarning.create(
+            {
+                "message": message,
+                "severity": severity,
+                "table_id": table_id,
+            }
+        )
+    if commit:
+        session.commit()
+    else:
+        session.flush()
 
 
 @with_session
@@ -392,6 +435,33 @@ def create_table_ownership(table_id, uid, commit=True, session=None):
 
 
 @with_session
+def create_table_ownerships(
+    table_id: int, owners: list[DataOwner] = [], commit=True, session=None
+):
+    """This function is used for loading owners from metastore."""
+    # delete all the ownerships of the table first
+    session.query(DataTableOwnership).filter_by(data_table_id=table_id).delete()
+
+    for owner in owners:
+        user = get_user_by_name(owner.username, session=session)
+        if not user:
+            LOG.error(
+                f"Failed to find user or group: {owner} when loading table owners."
+            )
+            continue
+        # add table ownership
+        table_ownership = DataTableOwnership(
+            data_table_id=table_id, uid=user.id, type=owner.type
+        )
+        session.add(table_ownership)
+
+    if commit:
+        session.commit()
+    else:
+        session.flush()
+
+
+@with_session
 def delete_table_ownership(table_id, uid, commit=True, session=None):
     table_ownership = get_table_ownership(table_id=table_id, uid=uid, session=session)
 
@@ -429,6 +499,38 @@ def get_column_by_table_id(table_id, session=None):
         .filter(DataTableColumn.table_id == table_id)
         .all()
     )
+
+
+@with_session
+def get_detailed_column_dict(column: DataTableColumn, with_table=False, session=None):
+    from logic import tag as tag_logic
+
+    column_dict = column.to_dict(with_table)
+    column_dict["stats"] = DataTableColumnStatistics.get_all(
+        column_id=column.id, session=session
+    )
+    column_dict["tags"] = tag_logic.get_tags_by_column_id(
+        column_id=column.id, session=session
+    )
+    column_dict[
+        "data_element_association"
+    ] = data_element_logic.get_data_element_association_by_column_id(
+        column.id, session=session
+    )
+    return column_dict
+
+
+@with_session
+def get_detailed_columns_dict_by_table_id(table_id, session=None):
+    data_table_columns = (
+        session.query(DataTableColumn)
+        .filter(DataTableColumn.table_id == table_id)
+        .all()
+    )
+    columns_info = []
+    for col in data_table_columns:
+        columns_info.append(get_detailed_column_dict(col, session=session))
+    return columns_info
 
 
 @with_session
@@ -487,7 +589,6 @@ def update_column_by_id(
     commit=True,
     session=None,
 ):
-
     table_column = get_column_by_id(id, session=session)
     if not table_column:
         return
@@ -727,6 +828,16 @@ def get_query_example_concurrences(table_id, limit=5, session=None):
 @with_session
 def get_table_query_samples_count(table_id, session):
     return session.query(DataTableQueryExecution).filter_by(table_id=table_id).count()
+
+
+@with_session
+def get_tables_by_query_execution_id(query_execution_id, session=None):
+    return (
+        session.query(DataTable)
+        .join(DataTableQueryExecution)
+        .filter(DataTableQueryExecution.query_execution_id == query_execution_id)
+        .all()
+    )
 
 
 """

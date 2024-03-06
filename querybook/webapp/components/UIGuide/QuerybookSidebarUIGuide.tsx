@@ -2,6 +2,8 @@ import React from 'react';
 import { useLocation } from 'react-router-dom';
 import Tour, { ReactourStep } from 'reactour';
 
+import { ComponentType, ElementType } from 'const/analytics';
+import { trackClick } from 'lib/analytics';
 import { getAppName } from 'lib/utils/global';
 import { getQueryString } from 'lib/utils/query-string';
 import { Button } from 'ui/Button/Button';
@@ -128,8 +130,7 @@ function getQuerybookSidebarTourSteps() {
             ),
         },
         {
-            selector:
-                '.EntitySidebar .sidebar-footer [aria-label="Search Docs/Tables"]',
+            selector: '.EntitySidebar .apps-list .SearchContainer',
             content: (
                 <>
                     <p>This is the Advanced Search for DataDocs and Tables.</p>
@@ -143,7 +144,7 @@ function getQuerybookSidebarTourSteps() {
             ),
         },
         {
-            selector: '.EntitySidebar .sidebar-footer .UserMenu',
+            selector: '.EntitySidebar .apps-list .UserMenu',
             content: (
                 <>
                     <p>
@@ -159,7 +160,7 @@ function getQuerybookSidebarTourSteps() {
             ),
         },
         {
-            selector: '.EntitySidebar .sidebar-footer .QueryEngineStatusButton',
+            selector: '.EntitySidebar .apps-list .QueryEngineStatusButton',
             content: (
                 <>
                     <p>
@@ -213,6 +214,10 @@ export const QuerybookSidebarUIGuide: React.FC = () => {
     const [showTour, setShowTour] = React.useState(false);
 
     const startTour = React.useCallback(() => {
+        trackClick({
+            component: ComponentType.LANDING_PAGE,
+            element: ElementType.TUTORIAL_BUTTON,
+        });
         setSteps((oldTour) =>
             oldTour.length ? oldTour : getQuerybookSidebarTourSteps()
         );

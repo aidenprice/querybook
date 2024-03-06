@@ -1,6 +1,6 @@
 import { getQueryLinePosition, IToken, tokenize } from './sql-lexer';
 import { find, invert, uniqueId } from 'lodash';
-import sqlFormatter from 'sql-formatter';
+import { format as sqlFormat, supportedDialects } from 'sql-formatter';
 
 const skipTokenType = new Set(['TEMPLATED_TAG', 'TEMPLATED_BLOCK', 'URL']);
 
@@ -48,23 +48,29 @@ function tokensToText(tokens: IToken[]) {
     };
 }
 
-export function format(
+export interface ISQLFormatOptions {
+    case?: 'lower' | 'upper';
+    tabWidth?: number;
+    useTabs?: boolean;
+
+    /**
+     * whether or not to thrown error when encoutering a parsing
+     * error, defaults to true
+     */
+    silent?: boolean;
+}
+
+interface IProcessedStatement {
+    statementText: string;
+    idToTemplateTag: Record<string, string>;
+    firstKeyWord: IToken;
+}
+
+function tokenizeAndFormatQuery(
     query: string,
     language: string,
-    options?: {
-        case?: 'lower' | 'upper';
-        indent?: string;
-    }
+    options: ISQLFormatOptions
 ) {
-    options = {
-        ...{
-            // default options
-            case: 'upper',
-            indent: '  ',
-        },
-        ...options,
-    };
-
     const tokens = tokenize(query, { language, includeUnknown: true });
     const statements: IToken[][] = [];
     tokens.reduce((statement, token, index) => {
@@ -88,44 +94,66 @@ export function format(
         return statement;
     }, [] as IToken[]);
 
+    return statements;
+}
+
+function processStatements(
+    query: string,
+    language: string,
+    options: ISQLFormatOptions
+) {
+    const statements = tokenizeAndFormatQuery(query, language, options);
     const queryLineLength = getQueryLinePosition(query);
     const newLineBetweenStatement = new Array(statements.length).fill(0);
     let lastStatementRange = null;
 
-    const processedStatements = statements.map((statement, index) => {
-        // This part of code calculates the number of new lines
-        // between 2 statements
-        const firstToken = statement[0];
-        const lastToken = statement[statement.length - 1];
-        const statementRange = [
-            queryLineLength[firstToken.line] + firstToken.start,
-            queryLineLength[lastToken.line] + lastToken.end,
-        ];
-        if (lastStatementRange) {
-            const inbetweenString = query.slice(
-                lastStatementRange[1],
-                statementRange[0]
+    const processedStatements: IProcessedStatement[] = statements.map(
+        (statement, index) => {
+            // This part of code calculates the number of new lines
+            // between 2 statements
+            const firstToken = statement[0];
+            const lastToken = statement[statement.length - 1];
+            const statementRange = [
+                queryLineLength[firstToken.line] + firstToken.start,
+                queryLineLength[lastToken.line] + lastToken.end,
+            ];
+            if (lastStatementRange) {
+                const inbetweenString = query.slice(
+                    lastStatementRange[1],
+                    statementRange[0]
+                );
+                const numberOfNewLine = inbetweenString.split('\n').length - 1;
+                newLineBetweenStatement[index] = Math.max(1, numberOfNewLine);
+            }
+            lastStatementRange = statementRange;
+
+            // This part of code formats the query
+            const firstKeyWord = find(
+                statement,
+                (token) => token.type === 'KEYWORD'
             );
-            const numberOfNewLine = inbetweenString.split('\n').length - 1;
-            newLineBetweenStatement[index] = Math.max(1, numberOfNewLine);
+            const { statementText, idToTemplateTag } = tokensToText(statement);
+
+            return {
+                statementText,
+                idToTemplateTag,
+                firstKeyWord,
+            };
         }
-        lastStatementRange = statementRange;
+    );
 
-        // This part of code formats the query
-        const firstKeyWord = find(
-            statement,
-            (token) => token.type === 'KEYWORD'
-        );
-        const { statementText, idToTemplateTag } = tokensToText(statement);
+    return {
+        newLineBetweenStatement,
+        processedStatements,
+    };
+}
 
-        return {
-            statementText,
-            idToTemplateTag,
-            firstKeyWord,
-        };
-    });
-
-    const formattedStatements: string[] = processedStatements.map(
+function formatEachStatement(
+    statements: IProcessedStatement[],
+    language: string,
+    options: ISQLFormatOptions
+) {
+    return statements.map(
         ({ firstKeyWord, statementText, idToTemplateTag }) => {
             // Use standard formatter to format
             let formattedStatement = statementText;
@@ -133,9 +161,10 @@ export function format(
                 firstKeyWord &&
                 allowedStatement.has(firstKeyWord.text.toLocaleLowerCase())
             ) {
-                formattedStatement = sqlFormatter.format(statementText, {
-                    indent: options.indent,
+                formattedStatement = sqlFormat(statementText, {
+                    tabWidth: options.tabWidth,
                     language: getLanguageForSqlFormatter(language),
+                    useTabs: options.useTabs,
                 });
             }
 
@@ -149,21 +178,60 @@ export function format(
             return formattedStatement;
         }
     );
-
-    return formattedStatements.reduce(
-        (acc, statement, index) =>
-            acc + '\n'.repeat(newLineBetweenStatement[index]) + statement,
-        ''
-    );
 }
 
-const SQL_FORMATTER_LANGUAGES = ['db2', 'n1ql', 'pl/sql', 'sql'] as const;
+export function format(
+    query: string,
+    language: string,
+    options?: ISQLFormatOptions
+) {
+    options = {
+        ...{
+            // default options
+            case: 'upper',
+            tabWidth: 2,
+            useTabs: false,
+            silent: true,
+        },
+        ...options,
+    };
 
-type SqlFormatterLanguage = typeof SQL_FORMATTER_LANGUAGES[number];
+    try {
+        const { processedStatements, newLineBetweenStatement } =
+            processStatements(query, language, options);
+        const formattedStatements = formatEachStatement(
+            processedStatements,
+            language,
+            options
+        );
 
-function getLanguageForSqlFormatter(language: string): SqlFormatterLanguage {
-    if ((SQL_FORMATTER_LANGUAGES as readonly string[]).includes(language)) {
-        return language as SqlFormatterLanguage;
+        return formattedStatements.reduce(
+            (acc, statement, index) =>
+                acc + '\n'.repeat(newLineBetweenStatement[index]) + statement,
+            ''
+        );
+    } catch (e) {
+        if (options.silent) {
+            return query;
+        } else {
+            throw e;
+        }
+    }
+}
+
+// Override according to https://github.com/sql-formatter-org/sql-formatter/blob/master/docs/language.md
+const languageMappingOverride = {
+    presto: 'trino',
+    sparksql: 'spark',
+};
+
+function getLanguageForSqlFormatter(language: string): string {
+    if (supportedDialects.includes(language)) {
+        return language;
+    }
+
+    if (language in languageMappingOverride) {
+        return languageMappingOverride[language];
     }
 
     return 'sql';

@@ -41,6 +41,14 @@ export function mergeSetFunction<T>(changes: Array<IBatchPromise<T>>) {
     };
 }
 
+export function mergeListFunction<T>(changes: Array<IBatchPromise<T>>) {
+    return {
+        data: [...changes.map((c) => c.data)],
+        onSuccess: () => changes.forEach((c) => c.onSuccess()),
+        onFailure: (e: unknown) => changes.forEach((c) => c.onFailure(e)),
+    };
+}
+
 export class BatchManager<T, M> {
     private changeVersion: number = 0;
     private processTimeout: number = null;
@@ -65,14 +73,14 @@ export class BatchManager<T, M> {
         this.mergeFunction = mergeFunction;
     }
 
-    public forceProcess() {
+    public async forceProcess() {
         // Nothing to save
         if (this.batchStack.length === 0) {
             return;
         }
 
         clearInterval(this.processTimeout);
-        this.processBatch(++this.changeVersion, true);
+        await this.processBatch(++this.changeVersion, true);
     }
 
     public batch(data: T): Promise<void> {

@@ -1,9 +1,14 @@
 import clsx from 'clsx';
-import React, { useEffect } from 'react';
+import Resizable from 're-resizable';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { DataTableViewMini } from 'components/DataTableViewMini/DataTableViewMini';
 import { IDataCell } from 'const/datadoc';
+import { useEvent } from 'hooks/useEvent';
+import { useResizeToCollapseSidebar } from 'hooks/useResizeToCollapse';
+import { enableResizable } from 'lib/utils';
+import { getShortcutSymbols, KeyMap, matchKeyMap } from 'lib/utils/keyboard';
 import { setSidebarTableId } from 'redux/querybookUI/action';
 import { IStoreState } from 'redux/store/types';
 import { IconButton } from 'ui/Button/IconButton';
@@ -20,6 +25,8 @@ interface IProps {
 }
 
 type LeftSidebarContentState = 'contents' | 'table' | 'default';
+const TOGGLE_TOC_SHORTCUT = getShortcutSymbols(KeyMap.dataDoc.toggleToC.key);
+const DEFAULT_SIDEBAR_WIDTH = 280;
 
 export const DataDocLeftSidebar: React.FunctionComponent<IProps> = ({
     docId,
@@ -32,7 +39,23 @@ export const DataDocLeftSidebar: React.FunctionComponent<IProps> = ({
     const clearSidebarTableId = () => dispatch(setSidebarTableId(null));
 
     const [contentState, setContentState] =
-        React.useState<LeftSidebarContentState>('default');
+        useState<LeftSidebarContentState>('default');
+
+    useEvent(
+        'keydown',
+        useCallback((evt: KeyboardEvent) => {
+            if (matchKeyMap(evt, KeyMap.dataDoc.toggleToC)) {
+                setContentState((contentState) => {
+                    if (contentState !== 'contents') {
+                        return 'contents';
+                    }
+                    return 'default';
+                });
+                evt.stopPropagation();
+                evt.preventDefault();
+            }
+        }, [])
+    );
 
     useEffect(
         () => () => {
@@ -41,6 +64,7 @@ export const DataDocLeftSidebar: React.FunctionComponent<IProps> = ({
         },
         []
     );
+
     useEffect(() => {
         if (sidebarTableId != null) {
             setContentState('table');
@@ -49,6 +73,15 @@ export const DataDocLeftSidebar: React.FunctionComponent<IProps> = ({
             setContentState('default');
         }
     }, [sidebarTableId]);
+
+    const resizeToCollapseSidebar = useResizeToCollapseSidebar(
+        DEFAULT_SIDEBAR_WIDTH,
+        1 / 3,
+        React.useCallback(() => {
+            clearSidebarTableId();
+            setContentState('default');
+        }, [])
+    );
 
     let contentDOM: React.ReactChild;
     if (contentState === 'contents') {
@@ -60,7 +93,9 @@ export const DataDocLeftSidebar: React.FunctionComponent<IProps> = ({
                         onClick={() => setContentState('default')}
                     />
                     <div className="flex-row">
-                        <span className="mr4">contents</span>
+                        <span className="mr4">
+                            contents ({TOGGLE_TOC_SHORTCUT})
+                        </span>
                         <InfoButton layout={['right', 'top']}>
                             Click to jump to the corresponding cell. Drag cells
                             to reorder them.
@@ -89,7 +124,7 @@ export const DataDocLeftSidebar: React.FunctionComponent<IProps> = ({
                     color="light"
                     invertCircle
                     size={20}
-                    tooltip="Table of Contents"
+                    tooltip={`Table of Contents (${TOGGLE_TOC_SHORTCUT})`}
                     tooltipPos="right"
                 />
             </div>
@@ -103,7 +138,18 @@ export const DataDocLeftSidebar: React.FunctionComponent<IProps> = ({
                 hidden: cells.length === 0,
             })}
         >
-            {contentDOM}
+            {contentState === 'default' ? (
+                <> {contentDOM} </>
+            ) : (
+                <Resizable
+                    defaultSize={{ width: `${DEFAULT_SIDEBAR_WIDTH}px` }}
+                    minWidth={DEFAULT_SIDEBAR_WIDTH}
+                    enable={enableResizable({ right: true })}
+                    onResize={resizeToCollapseSidebar}
+                >
+                    {contentDOM}
+                </Resizable>
+            )}
         </div>
     );
 };

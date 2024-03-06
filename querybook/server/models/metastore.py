@@ -1,17 +1,17 @@
 import sqlalchemy as sql
-from sqlalchemy.orm import backref, relationship
-
 from app import db
 from const.db import (
-    utf8mb4_name_length,
+    description_length,
+    mediumtext_length,
     name_length,
     now,
-    description_length,
+    type_length,
     url_length,
-    mediumtext_length,
+    utf8mb4_name_length,
 )
 from const.metastore import DataTableWarningSeverity
 from lib.sqlalchemy import CRUDMixin, TruncateString
+from sqlalchemy.orm import backref, relationship
 
 Base = db.Base
 
@@ -171,6 +171,9 @@ class DataTable(CRUDMixin, TruncateString("name", "type", "location"), Base):
 
     name = sql.Column(sql.String(length=name_length), index=True)
     type = sql.Column(sql.String(length=name_length), index=True)
+
+    # This field is no longer being used, keep it here for backward compatibility only.
+    # Table ownership will be fully managed by DataTableOwnership
     owner = sql.Column(sql.String(length=name_length))
 
     table_created_at = sql.Column(sql.DateTime)
@@ -260,6 +263,7 @@ class DataTableInformation(
     description = sql.Column(sql.Text(length=mediumtext_length))
     hive_metastore_description = sql.Column(sql.Text(length=mediumtext_length))
     column_info = sql.Column(sql.JSON)
+    custom_properties = sql.Column(sql.JSON)
 
     def to_dict(self):
         table_information = {
@@ -268,6 +272,7 @@ class DataTableInformation(
             "description": self.description,
             "hive_metastore_description": self.hive_metastore_description,
             "column_info": self.column_info,
+            "custom_properties": self.custom_properties,
         }
         return table_information
 
@@ -283,13 +288,22 @@ class DataTableColumn(TruncateString("name", "type", "comment"), Base):
     updated_at = sql.Column(sql.DateTime, default=now)
 
     name = sql.Column(sql.String(length=name_length), index=True)
-    type = sql.Column(sql.String(length=name_length))
+    type = sql.Column(sql.String(length=type_length))
 
     comment = sql.Column(sql.String(length=description_length))
     description = sql.Column(sql.Text(length=mediumtext_length))
 
     table_id = sql.Column(
         sql.Integer, sql.ForeignKey("data_table.id", ondelete="CASCADE")
+    )
+
+    data_elements = relationship(
+        "DataElement", secondary="data_element_association", uselist=True, viewonly=True
+    )
+    statistics = relationship(
+        "DataTableColumnStatistics",
+        uselist=True,
+        viewonly=True,
     )
 
     def to_dict(self, include_table=False):
@@ -310,7 +324,9 @@ class DataTableColumn(TruncateString("name", "type", "comment"), Base):
 class DataTableOwnership(Base):
     __tablename__ = "data_table_ownership"
     __table_args__ = (
-        sql.UniqueConstraint("data_table_id", "uid", name="unique_table_ownership"),
+        sql.UniqueConstraint(
+            "data_table_id", "uid", "type", name="unique_table_ownership"
+        ),
     )
 
     id = sql.Column(sql.Integer, primary_key=True)
@@ -321,6 +337,7 @@ class DataTableOwnership(Base):
     uid = sql.Column(
         sql.Integer, sql.ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
+    type = sql.Column(sql.String(name_length))
 
     def to_dict(self):
         item = {
@@ -328,6 +345,7 @@ class DataTableOwnership(Base):
             "data_table_id": self.data_table_id,
             "created_at": self.created_at,
             "uid": self.uid,
+            "type": self.type,
         }
         return item
 

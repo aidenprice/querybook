@@ -1,10 +1,8 @@
-import { decorate } from 'core-decorators';
+import { ContentState } from 'draft-js';
 import { snakeCase } from 'lodash';
-import { bind } from 'lodash-decorators';
-import memoizeOne from 'memoize-one';
-import React from 'react';
-import { connect } from 'react-redux';
-import { RouteComponentProps, withRouter } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useDispatch } from 'react-redux';
+import { useLocation } from 'react-router-dom';
 
 import { DataTableViewBoards } from 'components/DataTableViewBoards/DataTableViewBoards';
 import { DataTableViewColumn } from 'components/DataTableViewColumn/DataTableViewColumn';
@@ -14,7 +12,18 @@ import { DataTableViewQueryExamples } from 'components/DataTableViewQueryExample
 import { DataTableViewSamples } from 'components/DataTableViewSamples/DataTableViewSamples';
 import { DataTableViewSourceQuery } from 'components/DataTableViewSourceQuery/DataTableViewSourceQuery';
 import { DataTableViewWarnings } from 'components/DataTableViewWarnings/DataTableViewWarnings';
-import { IPaginatedQuerySampleFilters } from 'const/metastore';
+import { ComponentType, ElementType } from 'const/analytics';
+import {
+    IPaginatedQuerySampleFilters,
+    IUpdateTableParams,
+    MetadataMode,
+    MetadataType,
+} from 'const/metastore';
+import { SurveySurfaceType } from 'const/survey';
+import { useShallowSelector } from 'hooks/redux/useShallowSelector';
+import { useSurveyTrigger } from 'hooks/ui/useSurveyTrigger';
+import { useTrackView } from 'hooks/useTrackView';
+import { trackClick } from 'lib/analytics';
 import { setBrowserTitle } from 'lib/querybookUI';
 import history from 'lib/router-history';
 import { sanitizeUrlTitle } from 'lib/utils';
@@ -23,7 +32,7 @@ import NOOP from 'lib/utils/noop';
 import { getQueryString, replaceQueryString } from 'lib/utils/query-string';
 import * as dataSourcesActions from 'redux/dataSources/action';
 import { fullTableSelector } from 'redux/dataSources/selector';
-import { Dispatch, IStoreState } from 'redux/store/types';
+import { TableResource } from 'resource/table';
 import { Container } from 'ui/Container/Container';
 import { ErrorPage } from 'ui/ErrorPage/ErrorPage';
 import { FourOhFour } from 'ui/ErrorPage/FourOhFour';
@@ -38,290 +47,319 @@ const tabDefinitions = [
     {
         name: 'Overview',
         key: 'overview',
+        elementType: ElementType.OVERVIEW_TABLE_TAB,
     },
     {
         name: 'Columns',
         key: 'columns',
+        elementType: ElementType.COLUMNS_TABLE_TAB,
     },
     {
         name: 'Row Samples',
         key: 'row_samples',
+        elementType: ElementType.ROW_SAMPLES_TABLE_TAB,
     },
     {
         name: 'Lineage',
         key: 'lineage',
+        elementType: ElementType.LINEAGE_TABLE_TAB,
     },
     {
         name: 'Source Query',
         key: 'source_query',
+        elementType: ElementType.SOURCE_QUERY_TABLE_TAB,
     },
     {
         name: 'Query Examples',
         key: 'query_examples',
+        elementType: ElementType.QUERY_EXAMPLES_TABLE_TAB,
     },
     {
         name: 'Lists',
         key: 'lists',
+        elementType: ElementType.LISTS_TABLE_TAB,
     },
     {
         name: 'Warnings',
         key: 'warnings',
+        elementType: ElementType.WARNINGS_TABLE_TAB,
     },
 ];
 
-interface IDataTableViewOwnProps extends RouteComponentProps {
+export interface IDataTableViewProps {
     tableId: number;
 }
-
-type DataTableViewStateProps = ReturnType<typeof mapStateToProps>;
-type DataTableViewDispatchProps = ReturnType<typeof mapDispatchToProps>;
-
-export type IDataTableViewProps = IDataTableViewOwnProps &
-    DataTableViewStateProps &
-    DataTableViewDispatchProps;
 
 export interface IDataTableViewState {
     selectedTabKey: string;
 }
 
-class DataTableViewComponent extends React.PureComponent<
-    IDataTableViewProps,
-    IDataTableViewState
-> {
-    public readonly state = {
-        selectedTabKey: this.getInitialTabKey(),
-    };
+export const DataTableView: React.FC<IDataTableViewProps> = ({ tableId }) => {
+    const {
+        table,
+        schema,
+        tableName,
+        tableColumns,
+        dataLineages,
+        dataJobMetadataById,
+        tableWarnings,
+        metastore,
 
-    @decorate(memoizeOne)
-    public publishDataTableTitle(title: string) {
-        if (title) {
-            setBrowserTitle(title);
-            history.replace(
-                location.pathname.split('/').slice(0, 4).join('/') +
-                    `/${sanitizeUrlTitle(title)}/` +
-                    location.search +
-                    location.hash,
-                this.props.location.state
-            );
-        }
-    }
+        userInfo,
+    } = useShallowSelector((state) => {
+        const { dataJobMetadataById, dataLineages } = state.dataSources;
 
-    @bind
-    public getInitialTabKey() {
-        const queryParam = getQueryString();
-        return queryParam['tab'] || snakeCase(tabDefinitions[0].key);
-    }
-
-    @bind
-    public getInitialTabs() {
-        const tabs = tabDefinitions;
-        return tabs.map((tab) => ({
-            name: tab.name,
-            key: tab.key,
-            onClick: this.onTabSelected.bind(this, tab.key),
-        }));
-    }
-
-    @bind
-    public onTabSelected(key) {
-        // Temporal
-        replaceQueryString({ tab: key });
-        this.setState({ selectedTabKey: key });
-    }
-
-    @bind
-    public handleExampleFilter(params: IPaginatedQuerySampleFilters) {
-        replaceQueryString({
-            tab: 'query_examples',
-            ...params,
-        });
-        this.setState({ selectedTabKey: 'query_examples' });
-    }
-
-    @bind
-    public makeOverviewDOM() {
-        const { table, tableName, tableColumns, tableWarnings } = this.props;
-
-        return (
-            <DataTableViewOverview
-                table={table}
-                tableName={tableName}
-                tableColumns={tableColumns}
-                tableWarnings={tableWarnings}
-                onTabSelected={this.onTabSelected}
-                updateDataTableDescription={this.updateDataTableDescription}
-                onExampleFilter={this.handleExampleFilter}
-            />
-        );
-    }
-
-    @bind
-    public makeColumnsDOM(numberOfRows = null) {
-        const { table, tableColumns, updateDataColumnDescription } = this.props;
-
-        return (
-            <DataTableViewColumn
-                table={table}
-                tableColumns={tableColumns}
-                numberOfRows={numberOfRows}
-                updateDataColumnDescription={updateDataColumnDescription}
-            />
-        );
-    }
-
-    @bind
-    public makeSamplesDOM(numberOfRows: number) {
-        const { table, schema, tableColumns } = this.props;
-
-        return (
-            <Loader item={table} itemLoader={NOOP}>
-                <DataTableViewSamples
-                    table={table}
-                    schema={schema}
-                    tableColumns={tableColumns}
-                />
-            </Loader>
-        );
-    }
-
-    @bind
-    public makeBoardsDOM() {
-        const { table } = this.props;
-        return (
-            <Loader item={table} itemLoader={NOOP}>
-                <DataTableViewBoards table={table} />
-            </Loader>
-        );
-    }
-
-    @bind
-    public makeWarningsDOM() {
-        const { tableWarnings, table } = this.props;
-        return (
-            <Loader item={table} itemLoader={NOOP}>
-                <DataTableViewWarnings
-                    tableWarnings={tableWarnings}
-                    tableId={table.id}
-                />
-            </Loader>
-        );
-    }
-
-    @bind
-    public makeLineageDOM() {
-        const { table, dataLineages, loadDataLineages } = this.props;
-
-        return (
-            <Loader
-                item={dataLineages}
-                itemLoader={loadDataLineages.bind(null, table.id)}
-            >
-                <DataTableViewLineage
-                    dataLineageLoader={loadDataLineages}
-                    table={table}
-                    dataLineages={dataLineages}
-                />
-            </Loader>
-        );
-    }
-
-    @bind
-    public updateDataTableDescription(tableId: number, description) {
-        this.props.updateDataTable(tableId, { description });
-    }
-
-    @bind
-    public updateDataTableGolden(golden: boolean) {
-        this.props.updateDataTable(this.props.tableId, { golden });
-    }
-
-    @bind
-    public makeQueryDOM() {
         const {
             table,
-            dataJobMetadataById,
+            schema,
+            tableName,
+            tableColumns,
+            tableWarnings,
+            metastore,
+        } = fullTableSelector(state, tableId);
+
+        return {
+            table,
+            schema,
+            tableName,
+            tableColumns,
+
             dataLineages,
-            loadDataJobMetadata,
-            loadDataLineages,
-        } = this.props;
+            dataJobMetadataById,
+            tableWarnings,
+            metastore,
 
-        return (
-            <Loader
-                item={dataLineages.parentLineage[table.id]}
-                itemLoader={loadDataLineages.bind(null, table.id)}
-                itemKey={table.id}
-            >
-                <DataTableViewSourceQuery
-                    table={table}
-                    dataJobMetadataById={dataJobMetadataById}
-                    dataLineages={dataLineages}
-                    loadDataJobMetadata={loadDataJobMetadata}
-                />
-            </Loader>
-        );
-    }
+            userInfo: state.user.myUserInfo,
+        };
+    });
+    const dispatch = useDispatch();
+    const getTable = useCallback(
+        (tableId: number) =>
+            dispatch(dataSourcesActions.fetchDataTableIfNeeded(tableId)),
+        [dispatch]
+    );
 
-    @bind
-    public makeQueryExamplesDOM() {
-        return <DataTableViewQueryExamples tableId={this.props.tableId} />;
-    }
+    const loadDataJobMetadata = useCallback(
+        (dataJobMetadataId: number) => {
+            dispatch(
+                dataSourcesActions.fetchDataJobMetadataIfNeeded(
+                    dataJobMetadataId
+                )
+            );
+        },
+        [dispatch]
+    );
 
-    public componentDidMount() {
-        this.props.getTable(this.props.tableId);
-        this.publishDataTableTitle(this.props.tableName);
-    }
+    const updateDataTable = useCallback(
+        (tableId: number, params: IUpdateTableParams) =>
+            dispatch(dataSourcesActions.updateDataTable(tableId, params)),
+        [dispatch]
+    );
 
-    public componentDidUpdate(prevProps) {
-        if (
-            this.props.tableName &&
-            prevProps.tableName !== this.props.tableName
-        ) {
-            this.publishDataTableTitle(this.props.tableName);
+    const updateDataColumnDescription = useCallback(
+        (columnId: number, description: ContentState) =>
+            dispatch(
+                dataSourcesActions.updateDataColumnDescription(
+                    columnId,
+                    description
+                )
+            ),
+        [dispatch]
+    );
+    const loadDataLineages = useCallback(
+        (tableId: number) =>
+            dispatch(dataSourcesActions.fetchDataLineage(tableId)),
+        [dispatch]
+    );
+
+    const [selectedTabKey, setSelectedTabKey] = useState<string>(() => {
+        const queryParam = getQueryString();
+        return queryParam['tab'] || snakeCase(tabDefinitions[0].key);
+    });
+
+    useTrackView(ComponentType.TABLE_DETAIL_VIEW);
+    const triggerSurvey = useSurveyTrigger(true);
+    useEffect(() => {
+        if (!tableId || !tableName) {
+            return;
         }
-    }
+        triggerSurvey(SurveySurfaceType.TABLE_TRUST, {
+            table_id: tableId,
+            table_name: tableName,
+        });
+    }, [tableId, tableName, triggerSurvey]);
 
-    public render() {
-        const { table, tableId, getTable } = this.props;
+    useEffect(() => {
+        getTable(tableId);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tableId]);
 
-        return (
-            <Loader
-                item={table}
-                itemKey={tableId}
-                itemLoader={getTable.bind(null, tableId)}
-                emptyRenderer={() => (
-                    <FourOhFour>
-                        Table doesn't exist or has been deleted from Metastore
-                    </FourOhFour>
-                )}
-                errorRenderer={(error) => (
-                    <ErrorPage
-                        errorCode={error.response?.status}
-                        errorMessage={formatError(error)}
-                    />
-                )}
-            >
-                {this.renderTableView()}
-            </Loader>
-        );
-    }
+    const location = useLocation();
+    useEffect(() => {
+        if (tableName) {
+            setBrowserTitle(tableName);
+            history.replace(
+                location.pathname.split('/').slice(0, 4).join('/') +
+                    `/${sanitizeUrlTitle(tableName)}/` +
+                    location.search +
+                    location.hash,
+                location.state
+            );
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tableName]);
 
-    public renderTableView() {
-        const { selectedTabKey } = this.state;
-        const { tableName, table, userInfo } = this.props;
+    const handleEditMetadata = useCallback(
+        async (metadataType: MetadataType) => {
+            const { data: link } = await TableResource.getMetastoreLink(
+                tableId,
+                metadataType
+            );
+            window.open(link, '_blank');
+        },
+        [tableId]
+    );
 
+    const getOnEditMetadata = useCallback(
+        (metadataType: MetadataType) =>
+            metastore.config[metadataType] === MetadataMode.READ_ONLY
+                ? () => handleEditMetadata(metadataType)
+                : undefined,
+        [handleEditMetadata, metastore?.config]
+    );
+
+    const handleTabSelected = useCallback((key: string) => {
+        const elementType = tabDefinitions.find(
+            (t) => t.key === key
+        ).elementType;
+        trackClick({
+            component: ComponentType.TABLE_DETAIL_VIEW,
+            element: elementType,
+        });
+        // Temporal
+        replaceQueryString({ tab: key });
+        setSelectedTabKey(key);
+    }, []);
+
+    const handleExampleFilter = useCallback(
+        (params: IPaginatedQuerySampleFilters) => {
+            replaceQueryString({
+                tab: 'query_examples',
+                ...params,
+            });
+            setSelectedTabKey('query_examples');
+        },
+        []
+    );
+
+    const updateDataTableDescription = useCallback(
+        (tableId: number, description) =>
+            updateDataTable(tableId, { description }),
+        [updateDataTable]
+    );
+
+    const updateDataTableGolden = useCallback(
+        (golden: boolean) => updateDataTable(tableId, { golden }),
+        [tableId, updateDataTable]
+    );
+
+    const makeOverviewDOM = () => (
+        <DataTableViewOverview
+            table={table}
+            tableName={tableName}
+            tableColumns={tableColumns}
+            tableWarnings={tableWarnings}
+            onTabSelected={handleTabSelected}
+            updateDataTableDescription={updateDataTableDescription}
+            onExampleFilter={handleExampleFilter}
+            onEditTableDescriptionRedirect={getOnEditMetadata(
+                MetadataType.TABLE_DESCRIPTION
+            )}
+        />
+    );
+
+    const makeColumnsDOM = (numberOfRows = null) => (
+        <DataTableViewColumn
+            table={table}
+            numberOfRows={numberOfRows}
+            updateDataColumnDescription={updateDataColumnDescription}
+            onEditColumnDescriptionRedirect={getOnEditMetadata(
+                MetadataType.COLUMN_DESCRIPTION
+            )}
+        />
+    );
+
+    const makeSamplesDOM = () => (
+        <Loader item={table} itemLoader={NOOP}>
+            <DataTableViewSamples
+                table={table}
+                schema={schema}
+                tableColumns={tableColumns}
+            />
+        </Loader>
+    );
+
+    const makeBoardsDOM = () => (
+        <Loader item={table} itemLoader={NOOP}>
+            <DataTableViewBoards table={table} />
+        </Loader>
+    );
+
+    const makeWarningsDOM = () => (
+        <Loader item={table} itemLoader={NOOP}>
+            <DataTableViewWarnings
+                tableWarnings={tableWarnings}
+                tableId={table.id}
+            />
+        </Loader>
+    );
+
+    const makeLineageDOM = () => (
+        <Loader
+            item={dataLineages}
+            itemLoader={() => loadDataLineages(table.id)}
+        >
+            <DataTableViewLineage
+                dataLineageLoader={loadDataLineages}
+                table={table}
+                dataLineages={dataLineages}
+            />
+        </Loader>
+    );
+
+    const makeQueryDOM = () => (
+        <Loader
+            item={dataLineages.parentLineage[table.id]}
+            itemLoader={loadDataLineages.bind(null, table.id)}
+            itemKey={table.id}
+        >
+            <DataTableViewSourceQuery
+                table={table}
+                dataJobMetadataById={dataJobMetadataById}
+                dataLineages={dataLineages}
+                loadDataJobMetadata={loadDataJobMetadata}
+            />
+        </Loader>
+    );
+
+    const makeQueryExamplesDOM = () => (
+        <DataTableViewQueryExamples tableId={tableId} />
+    );
+
+    const renderTableView = () => {
         if (!table) {
             return;
         }
 
         const rendererByTab = {
-            overview: this.makeOverviewDOM,
-            columns: this.makeColumnsDOM,
-            row_samples: this.makeSamplesDOM,
-            lineage: this.makeLineageDOM,
-            source_query: this.makeQueryDOM,
-            query_examples: this.makeQueryExamplesDOM,
-            lists: this.makeBoardsDOM,
-            warnings: this.makeWarningsDOM,
+            overview: makeOverviewDOM,
+            columns: makeColumnsDOM,
+            row_samples: makeSamplesDOM,
+            lineage: makeLineageDOM,
+            source_query: makeQueryDOM,
+            query_examples: makeQueryExamplesDOM,
+            lists: makeBoardsDOM,
+            warnings: makeWarningsDOM,
         };
 
         const contentDOM =
@@ -337,12 +375,13 @@ class DataTableViewComponent extends React.PureComponent<
                     table={table}
                     tableName={tableName}
                     userInfo={userInfo}
-                    updateDataTableGolden={this.updateDataTableGolden}
+                    metastore={metastore}
+                    updateDataTableGolden={updateDataTableGolden}
                 />
                 <Tabs
                     items={tabDefinitions}
                     selectedTabKey={selectedTabKey}
-                    onSelect={this.onTabSelected}
+                    onSelect={handleTabSelected}
                     className="DataTableView-tabs"
                     wide
                     selectColor
@@ -350,66 +389,26 @@ class DataTableViewComponent extends React.PureComponent<
                 <div className="DataTableView-content mt16">{contentDOM}</div>
             </Container>
         );
-    }
-}
-
-function mapStateToProps(state: IStoreState, ownProps) {
-    const {
-        dataJobMetadataById,
-        dataTablesById,
-        dataLineages,
-        dataSchemasById,
-    } = state.dataSources;
-
-    const { tableId } = ownProps;
-
-    const { table, schema, tableName, tableColumns, tableWarnings } =
-        fullTableSelector(state, tableId);
-
-    return {
-        table,
-        schema,
-        tableName,
-        tableColumns,
-
-        dataLineages,
-        dataTablesById,
-        dataJobMetadataById,
-        dataSchemasById,
-        tableWarnings,
-
-        userInfo: state.user.myUserInfo,
     };
-}
 
-function mapDispatchToProps(dispatch: Dispatch, ownProps) {
-    return {
-        getTable: (tableId) =>
-            dispatch(dataSourcesActions.fetchDataTableIfNeeded(tableId)),
-
-        loadDataJobMetadata: (dataJobMetadataId) => {
-            dispatch(
-                dataSourcesActions.fetchDataJobMetadataIfNeeded(
-                    dataJobMetadataId
-                )
-            );
-        },
-
-        updateDataTable: (tableId, params) =>
-            dispatch(dataSourcesActions.updateDataTable(tableId, params)),
-
-        updateDataColumnDescription: (columnId, description) =>
-            dispatch(
-                dataSourcesActions.updateDataColumnDescription(
-                    columnId,
-                    description
-                )
-            ),
-        loadDataLineages: (tableId) =>
-            dispatch(dataSourcesActions.fetchDataLineage(tableId)),
-    };
-}
-
-export const DataTableView = withRouter<IDataTableViewOwnProps>(
-    connect(mapStateToProps, mapDispatchToProps)(DataTableViewComponent)
-);
+    return (
+        <Loader
+            item={table}
+            itemKey={tableId}
+            itemLoader={getTable.bind(null, tableId)}
+            emptyRenderer={() => (
+                <FourOhFour>
+                    Table doesn't exist or has been deleted from Metastore
+                </FourOhFour>
+            )}
+            errorRenderer={(error) => (
+                <ErrorPage
+                    errorCode={error.response?.status}
+                    errorMessage={formatError(error)}
+                />
+            )}
+        >
+            {renderTableView()}
+        </Loader>
+    );
+};

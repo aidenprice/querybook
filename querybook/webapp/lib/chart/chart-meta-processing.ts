@@ -11,6 +11,7 @@ import { IDataChartCellMeta } from 'const/datadoc';
 import {
     ChartDataAggType,
     ChartScaleFormat,
+    chartScaleToChartJSScale,
     ChartScaleType,
     ChartSize,
     ChartValueDisplayType,
@@ -205,7 +206,7 @@ export function mapMetaToChartOptions(
                         return context.chart.data.datasets[context.datasetIndex]
                             .label;
                     }
-                    return value.y;
+                    return value?.y;
                 },
                 display:
                     meta.visual.values?.display === ChartValueDisplayType.TRUE
@@ -344,7 +345,7 @@ function computeScaleOptions(
     };
 
     if (scaleType != null) {
-        axis.type = scaleType;
+        axis.type = chartScaleToChartJSScale[scaleType];
     }
 
     if (scaleType === 'time') {
@@ -355,6 +356,14 @@ function computeScaleOptions(
                 hour: 'MM/DD hA',
                 minute: 'h:mm a',
             },
+        };
+    } else if (scaleType === 'date') {
+        (axis as DeepPartial<TimeScaleOptions>).time = {
+            tooltipFormat: 'YYYY-MM-DD',
+            displayFormats: {
+                day: 'YYYY-MM-DD',
+            },
+            minUnit: 'day',
         };
     } else if (scaleType === 'linear' || scaleType === 'logarithmic') {
         // for empty case, it might be null or ""

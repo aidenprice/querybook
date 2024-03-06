@@ -5,9 +5,11 @@ import { DataDocBoardsButton } from 'components/DataDocBoardsButton/DataDocBoard
 import { DataDocDAGExporterButton } from 'components/DataDocDAGExporter/DataDocDAGExporterButton';
 import { DataDocTemplateButton } from 'components/DataDocTemplateButton/DataDocTemplateButton';
 import { DataDocUIGuide } from 'components/UIGuide/DataDocUIGuide';
-import { IDataDoc } from 'const/datadoc';
+import { ComponentType, ElementType } from 'const/analytics';
+import { IDataDoc, IDataDocMeta } from 'const/datadoc';
 import { useAnnouncements } from 'hooks/redux/useAnnouncements';
 import { useScrollToTop } from 'hooks/ui/useScrollToTop';
+import { trackClick } from 'lib/analytics';
 import { fetchDAGExporters } from 'redux/dataDoc/action';
 import { IStoreState } from 'redux/store/types';
 import { IconButton } from 'ui/Button/IconButton';
@@ -24,7 +26,7 @@ interface IProps {
     isEditable: boolean;
     isConnected: boolean;
 
-    changeDataDocMeta: (docId: number, meta: Record<string, any>) => any;
+    changeDataDocMeta: (docId: number, meta: IDataDocMeta) => Promise<void>;
     onClone: () => any;
 
     onCollapse: () => any;
@@ -87,7 +89,13 @@ export const DataDocRightSidebar: React.FunctionComponent<IProps> = ({
                 <IconButton
                     icon="ArrowUp"
                     className={showScrollToTop ? '' : 'hide-button'}
-                    onClick={scrollToTop}
+                    onClick={() => {
+                        trackClick({
+                            component: ComponentType.DATADOC_PAGE,
+                            element: ElementType.GO_TO_TOP_BUTTON,
+                        });
+                        scrollToTop();
+                    }}
                 />
                 <IconButton
                     icon={defaultCollapse ? 'Maximize2' : 'Minimize2'}
@@ -97,7 +105,13 @@ export const DataDocRightSidebar: React.FunctionComponent<IProps> = ({
                             : 'Collapse query cells'
                     }
                     tooltipPos="left"
-                    onClick={onCollapse}
+                    onClick={() => {
+                        trackClick({
+                            component: ComponentType.DATADOC_PAGE,
+                            element: ElementType.COLLAPSE_DATADOC_BUTTON,
+                        });
+                        onCollapse();
+                    }}
                 />
                 <DataDocUIGuide />
                 <IconButton

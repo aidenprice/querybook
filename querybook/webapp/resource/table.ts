@@ -10,16 +10,17 @@ import type {
     IDataTableSamples,
     IDataTableWarning,
     IDataTableWarningUpdateFields,
+    IDetailedDataColumn,
     ILineage,
     IPaginatedQuerySampleFilters,
     IQueryMetastore,
-    ITableColumnStats,
     ITableQueryEngine,
     ITableSampleParams,
     ITableStats,
     ITopQueryConcurrences,
     ITopQueryUser,
     IUpdateTableParams,
+    MetadataType,
 } from 'const/metastore';
 import type { ITag } from 'const/tag';
 import ds from 'lib/datasource';
@@ -36,7 +37,7 @@ export const TableSamplesResource = {
         ds.fetch<IDataTableSamples>(
             {
                 url: `/table/${tableId}/samples/`,
-                transformResponse: [JSONBig.parse],
+                transformResponse: [(data) => JSONBig.parse(data)],
             },
             {
                 environment_id: environmentId,
@@ -52,7 +53,7 @@ export const TableSamplesResource = {
         ds.save<number>(
             {
                 url: `/table/${tableId}/samples/`,
-                transformResponse: [JSONBig.parse],
+                transformResponse: [(data) => JSONBig.parse(data)],
             },
             {
                 environment_id: environmentId,
@@ -130,6 +131,13 @@ export const TableResource = {
         ds.fetch<IDataTable>(`/table_name/${schemaName}/${tableName}/`, {
             metastore_id: metastoreId,
         }),
+    getColumnDetails: (tableId: number) =>
+        ds.fetch<IDetailedDataColumn[]>(`/table/${tableId}/detailed_column/`),
+
+    getMetastoreLink: (tableId: number, metadataType: MetadataType) =>
+        ds.fetch<string>(`/table/${tableId}/metastore_link/`, {
+            metadata_type: metadataType,
+        }),
 
     checkIfExists: (
         metastoreId: number,
@@ -162,8 +170,9 @@ export const TableResource = {
 };
 
 export const TableColumnResource = {
-    getStats: (columnId: number) =>
-        ds.fetch<ITableColumnStats[]>(`/column/stats/${columnId}/`),
+    get: (columnId: number) =>
+        ds.fetch<IDetailedDataColumn>(`/column/${columnId}/`),
+
     update: (columnId: number, description: ContentState) => {
         const params = {
             description: convertContentStateToHTML(description),
@@ -171,6 +180,7 @@ export const TableColumnResource = {
 
         return ds.update<IDataColumn>(`/column/${columnId}/`, params);
     },
+    getTags: (columnId: number) => ds.fetch<ITag[]>(`/column/${columnId}/tag/`),
 };
 
 export const TableLineageResource = {
@@ -229,4 +239,17 @@ export const TableTagResource = {
         ds.update<ITag>(`/tag/${tag.id}/`, {
             meta: tag.meta,
         }),
+};
+
+export const DataElementResource = {
+    search: (keyword: string) =>
+        ds.fetch<
+            Array<{
+                name: string;
+                desc: string;
+            }>
+        >(`/data_element/keyword/`, { keyword }),
+
+    getMetastoreLink: (dataElementId: number) =>
+        ds.fetch<string>(`/data_element/${dataElementId}/metastore_link/`),
 };

@@ -20,6 +20,10 @@ const DEFAULT_KEY_MAP = {
             key: 'Enter',
             name: 'Confirm Modal',
         },
+        submitComment: {
+            key: 'Cmd-Enter',
+            name: 'Submit Comment',
+        },
     },
     dataDoc: {
         saveDataDoc: {
@@ -43,16 +47,20 @@ const DEFAULT_KEY_MAP = {
             name: 'Go to next cell',
         },
         copyCell: {
-            key: 'Alt-Shift-C',
+            key: 'Alt-C',
             name: 'Copy current cell',
         },
         pasteCell: {
-            key: 'Alt-Shift-V',
+            key: 'Alt-V',
             name: 'Paste below current cell',
         },
         deleteCell: {
-            key: 'Alt-Shift-D',
+            key: 'Alt-D',
             name: 'Delete current cell',
+        },
+        toggleToC: {
+            key: 'Alt-T',
+            name: 'Toggle Table of Contents',
         },
     },
     richText: {

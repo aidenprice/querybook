@@ -24,6 +24,7 @@ import {
     IPaginatedQuerySampleFilters,
 } from 'const/metastore';
 import { useMounted } from 'hooks/useMounted';
+import { Nullable } from 'lib/typescript';
 import { titleize } from 'lib/utils';
 import { generateFormattedDate } from 'lib/utils/datetime';
 import { getAppName } from 'lib/utils/global';
@@ -33,6 +34,7 @@ import { refreshDataTableInMetastore } from 'redux/dataSources/action';
 import { SoftButton, TextButton } from 'ui/Button/Button';
 import { EditableTextField } from 'ui/EditableTextField/EditableTextField';
 import { KeyContentDisplay } from 'ui/KeyContentDisplay/KeyContentDisplay';
+import { Link } from 'ui/Link/Link';
 import { LoadingRow } from 'ui/Loading/Loading';
 import { Message } from 'ui/Message/Message';
 import { ShowMoreText } from 'ui/ShowMoreText/ShowMoreText';
@@ -86,6 +88,7 @@ export interface IQuerybookTableViewOverviewProps {
     tableColumns: IDataColumn[];
     tableWarnings: IDataTableWarning[];
 
+    onEditTableDescriptionRedirect?: Nullable<() => Promise<void>>;
     onTabSelected: (key: string) => any;
     updateDataTableDescription: (
         tableId: number,
@@ -102,6 +105,7 @@ export const DataTableViewOverview: React.FC<
     tableWarnings,
     onExampleFilter,
     updateDataTableDescription,
+    onEditTableDescriptionRedirect,
 }) => {
     const onDescriptionSave = useCallback(
         (description: DraftJs.ContentState) =>
@@ -115,6 +119,8 @@ export const DataTableViewOverview: React.FC<
         <EditableTextField
             value={table.description as DraftJs.ContentState}
             onSave={onDescriptionSave}
+            placeholder="No description for this table yet."
+            onEditRedirect={onEditTableDescriptionRedirect}
         />
     ) : null;
 
@@ -144,6 +150,20 @@ export const DataTableViewOverview: React.FC<
                 </KeyContentDisplay>
             );
         });
+
+    const customPropertiesDOM = Object.entries(
+        table.custom_properties ?? {}
+    ).map(([key, value]) => (
+        <KeyContentDisplay key={key} keyString={titleize(key, '_', ' ')}>
+            {value && /https?:\/\/[^\s]+/.test(value.trim()) ? (
+                <Link to={value} newTab>
+                    {value}
+                </Link>
+            ) : (
+                value
+            )}
+        </KeyContentDisplay>
+    ));
 
     const rawMetastoreInfoDOM = table.hive_metastore_description ? (
         <pre className="raw-metastore-info">
@@ -187,6 +207,7 @@ export const DataTableViewOverview: React.FC<
     const detailsSection = (
         <DataTableViewOverviewSection title="Details">
             {detailsDOM}
+            {customPropertiesDOM}
         </DataTableViewOverviewSection>
     );
 

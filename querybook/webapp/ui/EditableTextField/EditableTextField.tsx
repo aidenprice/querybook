@@ -4,7 +4,10 @@ import React, { useCallback } from 'react';
 
 import { AsyncButton } from 'ui/AsyncButton/AsyncButton';
 import { Button, TextButton } from 'ui/Button/Button';
-import { RichTextEditor } from 'ui/RichTextEditor/RichTextEditor';
+import {
+    IRichTextEditorHandles,
+    RichTextEditor,
+} from 'ui/RichTextEditor/RichTextEditor';
 
 import './EditableTextField.scss';
 
@@ -13,13 +16,22 @@ export interface IEditableTextFieldProps {
     onSave: (content: DraftJs.ContentState) => Promise<any>;
     className?: string;
     readonly?: boolean;
+    placeholder?: string;
+    onEditRedirect?: () => void;
 }
 
 export const EditableTextField: React.FunctionComponent<
     IEditableTextFieldProps
-> = ({ value, onSave, className, readonly = false }) => {
+> = ({
+    value,
+    onSave,
+    className,
+    placeholder,
+    readonly = false,
+    onEditRedirect,
+}) => {
     const [editMode, setEditMode] = React.useState(false);
-    const editorRef = React.useRef<RichTextEditor>(null);
+    const editorRef = React.useRef<IRichTextEditorHandles>(null);
 
     const toggleEditMode = useCallback(
         () =>
@@ -62,7 +74,7 @@ export const EditableTextField: React.FunctionComponent<
             <TextButton
                 icon="Edit"
                 title="Edit"
-                onClick={toggleEditMode}
+                onClick={onEditRedirect ?? toggleEditMode}
                 className="edit-mode-button"
             />
         ) : null;
@@ -73,6 +85,7 @@ export const EditableTextField: React.FunctionComponent<
                 value={value}
                 readOnly={readonly || !editMode}
                 ref={editorRef}
+                placeholder={placeholder}
             />
             {toggleEditModeButton}
         </div>

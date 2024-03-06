@@ -1,15 +1,32 @@
 import CodeMirror from 'codemirror';
+import { TDataDocMetaVariables } from 'const/datadoc';
 
 import type { ILinterWarning } from 'lib/sql-helper/sql-lexer';
 import { TemplatedQueryResource } from 'resource/queryExecution';
 
-export function createSQLLinter(engineId: number) {
+export function createSQLLinter(
+    engineId: number,
+    templatedVariables: TDataDocMetaVariables
+) {
     return async (query: string, cm: CodeMirror.Editor) => {
         const { data: validationResults } =
-            await TemplatedQueryResource.validateQuery(query, engineId);
+            await TemplatedQueryResource.validateQuery(
+                query,
+                engineId,
+                templatedVariables
+            );
 
         return validationResults.map((validationError) => {
-            const { line, ch, severity, message } = validationError;
+            const {
+                type,
+                start_line: line,
+                start_ch: ch,
+                end_line: endLine,
+                end_ch: endCh,
+                severity,
+                message,
+                suggestion,
+            } = validationError;
 
             const errorToken = cm.getTokenAt({
                 line,
@@ -24,11 +41,13 @@ export function createSQLLinter(engineId: number) {
                         line,
                     },
                     to: {
-                        ch: errorToken.end,
-                        line,
+                        ch: endCh != null ? endCh + 1 : errorToken.end,
+                        line: endLine ?? line,
                     },
                     severity,
                     message,
+                    type,
+                    suggestion,
                 } as ILinterWarning;
             } else {
                 return {
@@ -42,6 +61,8 @@ export function createSQLLinter(engineId: number) {
                     },
                     severity,
                     message,
+                    type,
+                    suggestion,
                 } as ILinterWarning;
             }
         });

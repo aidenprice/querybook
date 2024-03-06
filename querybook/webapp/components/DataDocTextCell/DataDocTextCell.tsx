@@ -13,7 +13,10 @@ import { IDataCellMetaBase } from 'const/datadoc';
 import { SearchAndReplaceContext } from 'context/searchAndReplace';
 import { useDebounceState } from 'hooks/redux/useDebounceState';
 import { KeyMap, matchKeyMap } from 'lib/utils/keyboard';
-import { RichTextEditor } from 'ui/RichTextEditor/RichTextEditor';
+import {
+    IRichTextEditorHandles,
+    RichTextEditor,
+} from 'ui/RichTextEditor/RichTextEditor';
 
 import './DataDocTextCell.scss';
 
@@ -30,7 +33,6 @@ interface IProps {
         context?: string | DraftJs.ContentState;
         meta?: IDataCellMetaBase;
     }) => any;
-    onDeleteKeyPressed?: () => any;
     onFocus?: () => any;
     onBlur?: () => any;
     onUpKeyPressed?: () => any;
@@ -45,7 +47,6 @@ export const DataDocTextCell = React.memo<IProps>(
         isEditable,
         shouldFocus,
         onChange,
-        onDeleteKeyPressed,
         onFocus,
         onBlur,
         onUpKeyPressed,
@@ -53,7 +54,7 @@ export const DataDocTextCell = React.memo<IProps>(
     }) => {
         const searchContext = useContext(SearchAndReplaceContext);
         const [focused, setFocused] = useState(false);
-        const editorRef = useRef<RichTextEditor>(null);
+        const editorRef = useRef<IRichTextEditorHandles>(null);
 
         const onChangeContext = useCallback(
             (newContext: DraftJs.ContentState) => {
@@ -139,9 +140,6 @@ export const DataDocTextCell = React.memo<IProps>(
                         onDownKeyPressed();
                         handled = true;
                     }
-                } else if (matchKeyMap(event, KeyMap.richText.deleteCell)) {
-                    onDeleteKeyPressed?.();
-                    handled = true;
                 } else if (matchKeyMap(event, KeyMap.dataDoc.openSearch)) {
                     searchContext.showSearchAndReplace();
                     handled = true;
@@ -152,7 +150,7 @@ export const DataDocTextCell = React.memo<IProps>(
 
                 return handled;
             },
-            [onUpKeyPressed, onDownKeyPressed, onDeleteKeyPressed]
+            [onUpKeyPressed, onDownKeyPressed]
         );
 
         const className = clsx({
@@ -173,7 +171,7 @@ export const DataDocTextCell = React.memo<IProps>(
                 />
                 <DraftJsSearchHighlighter
                     searchContext={searchContext}
-                    editor={editorRef.current}
+                    editorRef={editorRef}
                     cellId={cellId}
                 />
             </div>

@@ -18,7 +18,7 @@ import dataDocSocket from 'lib/data-doc/datadoc-socketio';
 import ds from 'lib/datasource';
 import {
     IScheduledDoc,
-    IScheduledDocFilters,
+    ITransformedScheduledDocFilters,
 } from 'redux/scheduledDataDoc/types';
 
 export const DataDocResource = {
@@ -101,7 +101,10 @@ export const DataDocResource = {
         }>(`/favorite_data_doc/${docId}/`),
     unfavorite: (docId: number) => ds.delete(`/favorite_data_doc/${docId}/`),
 
-    run: (docId: number) => ds.save<null>(`/datadoc/${docId}/run/`),
+    run: (docId: number, sendNotification: boolean = false) =>
+        ds.save<null>(`/datadoc/${docId}/run/`, {
+            send_notification: sendNotification,
+        }),
 
     getDAGExport: (docId: number) =>
         ds.fetch<IDataDocSavedDAGExport>(`/datadoc/${docId}/dag_export/`),
@@ -190,7 +193,7 @@ export const DataDocScheduleResource = {
         envId: number;
         limit: number;
         offset: number;
-        filters: IScheduledDocFilters;
+        filters: ITransformedScheduledDocFilters;
     }) =>
         ds.fetch<{ docs: IScheduledDoc[]; count: number }>(
             '/datadoc/scheduled/',

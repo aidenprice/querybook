@@ -1,19 +1,24 @@
 import { isEmpty } from 'lodash';
 import moment from 'moment';
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useDispatch } from 'react-redux';
 import CreatableSelect from 'react-select/creatable';
 
-import { TableTagGroupSelect } from 'components/DataTableTags/TableTagGroupSelect';
 import { UserAvatar } from 'components/UserBadge/UserAvatar';
 import { UserSelect } from 'components/UserSelect/UserSelect';
+import PublicConfig from 'config/querybook_public_config.yaml';
+import { ComponentType, ElementType } from 'const/analytics';
 import {
     IBoardPreview,
     IDataDocPreview,
     IQueryPreview,
     ITablePreview,
 } from 'const/search';
+import { SurveySurfaceType } from 'const/survey';
 import { useShallowSelector } from 'hooks/redux/useShallowSelector';
+import { useSurveyTrigger } from 'hooks/ui/useSurveyTrigger';
+import { useTrackView } from 'hooks/useTrackView';
+import { trackClick, trackView } from 'lib/analytics';
 import { titleize } from 'lib/utils';
 import { getCurrentEnv } from 'lib/utils/query-string';
 import {
@@ -31,6 +36,7 @@ import {
 import * as searchActions from 'redux/search/action';
 import { RESULT_PER_PAGE, SearchOrder, SearchType } from 'redux/search/types';
 import { IStoreState } from 'redux/store/types';
+import { DataElementResource, TableTagResource } from 'resource/table';
 import { Button } from 'ui/Button/Button';
 import { Checkbox } from 'ui/Checkbox/Checkbox';
 import { Container } from 'ui/Container/Container';
@@ -45,9 +51,11 @@ import { PrettyNumber } from 'ui/PrettyNumber/PrettyNumber';
 import { SearchBar } from 'ui/SearchBar/SearchBar';
 import { Select } from 'ui/Select/Select';
 import { SimpleReactSelect } from 'ui/SimpleReactSelect/SimpleReactSelect';
-import { EmptyText } from 'ui/StyledText/StyledText';
+import { AccentText, EmptyText } from 'ui/StyledText/StyledText';
 import { Tabs } from 'ui/Tabs/Tabs';
+import { ToggleSwitch } from 'ui/ToggleSwitch/ToggleSwitch';
 
+import { EntitySelect } from './EntitySelect';
 import { SearchDatePicker } from './SearchDatePicker';
 import {
     BoardItem,
@@ -55,10 +63,12 @@ import {
     DataTableItem,
     QueryItem,
 } from './SearchResultItem';
-import { TableSelect } from './TableSelect';
 import { SearchSchemaSelect } from './SearchSchemaSelect';
+import { TableSelect } from './TableSelect';
 
 import './SearchOverview.scss';
+
+const AIAssistantConfig = PublicConfig.ai_assistant;
 
 const userReactSelectStyle = makeReactSelectStyle(
     true,
@@ -69,9 +79,18 @@ interface ISearchOverviewProps {
     fromBoardId?: number;
 }
 
+const SearchTypeToElementType = {
+    [SearchType.Query]: ElementType.QUERY_RESULT_ITEM,
+    [SearchType.DataDoc]: ElementType.DATADOC_RESULT_ITEM,
+    [SearchType.Table]: ElementType.TABLE_RESULT_ITEM,
+    [SearchType.Board]: ElementType.LIST_RESULT_ITEM,
+};
+
 export const SearchOverview: React.FC<ISearchOverviewProps> = ({
     fromBoardId,
 }) => {
+    useTrackView(ComponentType.SEARCH_MODAL);
+
     const {
         resultByPage,
         currentPage,
@@ -83,11 +102,12 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
         searchOrder,
         searchType,
         searchAuthorChoices,
+        useVectorSearch,
 
         searchRequest,
         queryMetastores,
         queryEngines,
-        metastoreId,
+        metastoreId: _metastoreId,
     } = useShallowSelector((state: IStoreState) => ({
         ...state.search,
         environment: currentEnvironmentSelector(state),
@@ -96,9 +116,40 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
         queryMetastores: queryMetastoresSelector(state),
         metastoreId: state.dataTableSearch.metastoreId,
     }));
+    const metastoreId = _metastoreId ?? queryMetastores?.[0]?.id;
 
-    const results = resultByPage[currentPage] || [];
+    const results = useMemo(
+        () => resultByPage[currentPage] || [],
+        [resultByPage, currentPage]
+    );
     const isLoading = !!searchRequest;
+
+    const triggerSurvey = useSurveyTrigger();
+    useEffect(() => {
+        if (
+            !isLoading &&
+            searchString.length > 0 &&
+            searchType === SearchType.Table
+        ) {
+            triggerSurvey(SurveySurfaceType.TABLE_SEARCH, {
+                search_query: searchString,
+                search_filter: Object.keys(searchFilters),
+                is_modal: true,
+            });
+        }
+    }, [searchString, searchType, isLoading, searchFilters, triggerSurvey]);
+
+    // Log search results
+    useEffect(() => {
+        if (!isLoading && searchString.length > 0 && results.length > 0) {
+            const elementType = SearchTypeToElementType[searchType];
+            trackView(ComponentType.SEARCH_MODAL, elementType, {
+                search: searchString,
+                results: results.map((r) => r.id),
+                page: currentPage,
+            });
+        }
+    }, [isLoading, searchString, results, searchType, currentPage]);
 
     const dispatch = useDispatch();
     const handleUpdateSearchString = React.useCallback(
@@ -118,6 +169,9 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
     }, []);
     const updateSearchType = React.useCallback((type) => {
         dispatch(searchActions.updateSearchType(type));
+    }, []);
+    const updateUseVectorSearch = React.useCallback((useVectorSearch) => {
+        dispatch(searchActions.updateUseVectorSearch(useVectorSearch));
     }, []);
     const moveToPage = React.useCallback((page) => {
         dispatch(searchActions.moveToPage(page));
@@ -141,10 +195,12 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
             {
                 name: 'Query',
                 key: SearchType.Query,
+                elementType: ElementType.QUERY_SEARCH_TAB,
             },
             {
                 name: 'DataDoc',
                 key: SearchType.DataDoc,
+                elementType: ElementType.DATADOC_SEARCH_TAB,
             },
         ];
 
@@ -152,12 +208,14 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
             searchTabs.push({
                 name: 'Tables',
                 key: SearchType.Table,
+                elementType: ElementType.TABLE_SEARCH_TAB,
             });
         }
 
         searchTabs.push({
             name: 'List',
             key: SearchType.Board,
+            elementType: ElementType.LIST_SEARCH_TAB,
         });
 
         return searchTabs;
@@ -167,6 +225,13 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
 
     const onSearchTabSelect = React.useCallback(
         (newSearchType: string) => {
+            const elementType = searchTabs.find(
+                (t) => t.key === newSearchType
+            ).elementType;
+            trackClick({
+                component: ComponentType.SEARCH_MODAL,
+                element: elementType,
+            });
             updateSearchType(newSearchType);
         },
         [updateSearchType]
@@ -210,6 +275,23 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
         [updateSearchFilter]
     );
 
+    const onTrackClick = React.useCallback(
+        (pos) => {
+            const elementType = SearchTypeToElementType[searchType];
+            trackClick({
+                component: ComponentType.SEARCH_MODAL,
+                element: elementType,
+                aux: {
+                    search: searchString,
+                    results: results.map((r) => r.id),
+                    page: currentPage,
+                    pos,
+                },
+            });
+        },
+        [searchType, searchString, results, currentPage]
+    );
+
     const getSearchBarDOM = () => {
         const placeholder =
             searchType === SearchType.Query
@@ -217,8 +299,9 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
                 : searchType === SearchType.DataDoc
                 ? 'Search data docs'
                 : 'Search tables';
+
         return (
-            <div className="search-bar-wrapper flex-row">
+            <div className="search-bar-wrapper">
                 <SearchBar
                     className="SearchBar"
                     value={searchString}
@@ -229,6 +312,19 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
                     placeholder={placeholder}
                     autoFocus
                 />
+                {searchType === SearchType.Table &&
+                    AIAssistantConfig.enabled &&
+                    AIAssistantConfig.table_vector_search.enabled && (
+                        <div className="mt8 flex-row">
+                            <AccentText weight="bold" className="ml8 mr12">
+                                Natural Language Search
+                            </AccentText>
+                            <ToggleSwitch
+                                checked={useVectorSearch}
+                                onChange={(val) => updateUseVectorSearch(val)}
+                            />
+                        </div>
+                    )}
             </div>
         );
     };
@@ -276,18 +372,36 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
         [updateSearchFilter]
     );
 
+    const updateDataElements = React.useCallback(
+        (newDataElements: string[]) => {
+            updateSearchFilter(
+                'data_elements',
+                newDataElements.length ? newDataElements : null
+            );
+        },
+        [updateSearchFilter]
+    );
+
     const tagDOM = (
-        <TableTagGroupSelect
-            tags={searchFilters?.tags}
-            updateTags={updateTags}
+        <EntitySelect
+            selectedEntities={searchFilters?.tags || []}
+            loadEntities={TableTagResource.search}
+            onEntitiesChange={updateTags}
+            placeholder="search tag"
         />
     );
+
+    const queryMetastore =
+        searchType === SearchType.Table &&
+        queryMetastores.find((metastore) => metastore.id === metastoreId);
+    const queryMetastoreHasDataElements =
+        !!queryMetastore?.flags?.has_data_element;
 
     const metastoreSelectDOM =
         searchType === SearchType.Table ? (
             <div className="tables-search-select">
                 <Select
-                    value={metastoreId || queryMetastores[0].id}
+                    value={metastoreId}
                     onChange={handleMetastoreChange}
                     transparent
                 >
@@ -299,6 +413,14 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
                 </Select>
             </div>
         ) : null;
+    const dataElementDOM = queryMetastoreHasDataElements && (
+        <EntitySelect
+            selectedEntities={searchFilters?.data_elements || []}
+            loadEntities={DataElementResource.search}
+            onEntitiesChange={updateDataElements}
+            placeholder="search data element"
+        />
+    );
 
     const orderByButtonFormatter = React.useCallback(
         () => (
@@ -339,42 +461,48 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
     const environment = getCurrentEnv();
     const resultsDOM =
         searchType === SearchType.Query
-            ? (results as IQueryPreview[]).map((result) => (
+            ? (results as IQueryPreview[]).map((result, index) => (
                   <QueryItem
                       searchString={searchString}
                       key={`${result.query_type}-${result.id}`}
                       preview={result}
                       environmentName={environment.name}
                       fromBoardId={fromBoardId}
+                      onTrackClick={() => onTrackClick(index)}
                   />
               ))
             : searchType === SearchType.DataDoc
-            ? (results as IDataDocPreview[]).map((result) => (
+            ? (results as IDataDocPreview[]).map((result, index) => (
                   <DataDocItem
                       searchString={searchString}
                       key={result.id}
                       preview={result}
                       url={`/${environment.name}/datadoc/${result.id}/`}
                       fromBoardId={fromBoardId}
+                      onTrackClick={() => onTrackClick(index)}
                   />
               ))
             : searchType === SearchType.Table
-            ? (results as ITablePreview[]).map((result) => (
+            ? (results as ITablePreview[]).map((result, index) => (
                   <DataTableItem
                       key={result.id}
                       preview={result}
                       url={`/${environment.name}/table/${result.id}/`}
                       searchString={searchString}
                       fromBoardId={fromBoardId}
+                      currentPage={currentPage}
+                      index={index}
+                      onTrackClick={() => onTrackClick(index)}
                   />
               ))
-            : (results as IBoardPreview[]).map((result) => (
+            : (results as IBoardPreview[]).map((result, index) => (
                   <BoardItem
                       key={result.id}
                       preview={result}
                       url={`/${environment.name}/list/${result.id}/`}
                       searchString={searchString}
                       fromBoardId={fromBoardId}
+                      onTrackClick={() => onTrackClick(index)}
                   />
               ));
 
@@ -575,7 +703,7 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
                     <span className="filter-title">Query Engine</span>
                     {queryEngineFilterDOM}
                 </div>
-                {queryMetastores.length && (
+                {queryMetastores.length > 0 && (
                     <div className="search-filter">
                         <span className="filter-title">Tables</span>
                         {tableFilterDOM}
@@ -613,10 +741,12 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
             </>
         ) : searchType === 'Table' ? (
             <>
-                <div className="search-filter">
-                    <span className="filter-title">Metastore</span>
-                    {metastoreSelectDOM}
-                </div>
+                {queryMetastores.length > 1 && (
+                    <div className="search-filter">
+                        <span className="filter-title">Metastore</span>
+                        {metastoreSelectDOM}
+                    </div>
+                )}
                 <div className="search-filter">
                     <span className="filter-title">Top Tier</span>
                     <div className="result-item-golden horizontal-space-between">
@@ -635,23 +765,50 @@ export const SearchOverview: React.FC<ISearchOverviewProps> = ({
                     </div>
                 </div>
                 <div className="search-filter">
-                    <span className="filter-title">Schemas</span>
+                    <span
+                        className="filter-title"
+                        aria-label="Table belongs to ONE OF selected schemas"
+                        data-balloon-pos="up"
+                    >
+                        Schemas
+                    </span>
                     <SearchSchemaSelect
                         updateSearchFilter={updateSearchFilter}
                         schema={searchFilters?.schema}
+                        metastoreId={metastoreId}
                     />
+                </div>
+                {queryMetastoreHasDataElements && (
+                    <div className="search-filter">
+                        <span
+                            className="filter-title"
+                            aria-label="Table associates with ALL selected data elements"
+                            data-balloon-pos="up"
+                        >
+                            Data Elements
+                        </span>
+                        {dataElementDOM}
+                    </div>
+                )}
+
+                <div className="search-filter">
+                    <span
+                        className="filter-title"
+                        aria-label="Table contains ALL selected tags"
+                        data-balloon-pos="up"
+                    >
+                        Tags
+                    </span>
+                    {tagDOM}
+                </div>
+
+                <div className="search-filter">
+                    <span className="filter-title">Search Settings</span>
+                    {searchSettingsDOM}
                 </div>
                 <div className="search-filter">
                     <span className="filter-title">Created At</span>
                     {dateFilterDOM}
-                </div>
-                <div className="search-filter">
-                    <span className="filter-title">Tags</span>
-                    {tagDOM}
-                </div>
-                <div className="search-filter">
-                    <span className="filter-title">Search Settings</span>
-                    {searchSettingsDOM}
                 </div>
             </>
         ) : (

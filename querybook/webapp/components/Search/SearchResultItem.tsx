@@ -1,3 +1,4 @@
+import DOMPurify from 'dompurify';
 import { escape, escapeRegExp } from 'lodash';
 import React, { useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -55,7 +56,9 @@ const HighlightTitle: React.FunctionComponent<{
             <div
                 className="result-item-title"
                 dangerouslySetInnerHTML={{
-                    __html: highlightedTitle,
+                    __html: DOMPurify.sanitize(highlightedTitle, {
+                        USE_PROFILES: { html: true },
+                    }),
                 }}
             />
         </AccentText>
@@ -86,6 +89,7 @@ interface IQueryItemProps {
     searchString: string;
     environmentName: string;
     fromBoardId: number | undefined;
+    onTrackClick: () => void;
 }
 
 export const QueryItem: React.FunctionComponent<IQueryItemProps> = ({
@@ -93,6 +97,7 @@ export const QueryItem: React.FunctionComponent<IQueryItemProps> = ({
     environmentName,
     searchString,
     fromBoardId,
+    onTrackClick,
 }) => {
     const {
         author_uid: authorUid,
@@ -110,7 +115,13 @@ export const QueryItem: React.FunctionComponent<IQueryItemProps> = ({
     const url = isQueryCell
         ? `/${environmentName}/datadoc/${preview.data_doc_id}/?cellId=${id}`
         : `/${environmentName}/query_execution/${id}/`;
-    const handleClick = React.useMemo(() => openClick.bind(null, url), [url]);
+    const handleClick = React.useCallback(
+        (e) => {
+            onTrackClick();
+            openClick(url, e);
+        },
+        [url, onTrackClick]
+    );
     const queryEngineById = useSelector(queryEngineByIdEnvSelector);
     const selfRef = useRef<HTMLDivElement>();
 
@@ -158,8 +169,9 @@ export const QueryItem: React.FunctionComponent<IQueryItemProps> = ({
             {!isQueryTextExpanded ? (
                 <span
                     dangerouslySetInnerHTML={{
-                        __html: formatHighlightStrings(
-                            queryTextHighlightedContent
+                        __html: DOMPurify.sanitize(
+                            formatHighlightStrings(queryTextHighlightedContent),
+                            { USE_PROFILES: { html: true } }
                         ),
                     }}
                 />
@@ -237,6 +249,7 @@ interface IDataDocItemProps {
     searchString: string;
     url: string;
     fromBoardId: number | undefined;
+    onTrackClick: () => void;
 }
 
 export const DataDocItem: React.FunctionComponent<IDataDocItemProps> = ({
@@ -244,12 +257,19 @@ export const DataDocItem: React.FunctionComponent<IDataDocItemProps> = ({
     url,
     searchString,
     fromBoardId,
+    onTrackClick,
 }) => {
     const selfRef = useRef<HTMLDivElement>();
 
     const { owner_uid: ownerUid, created_at: createdAt, id } = preview;
     const { userInfo: ownerInfo, loading } = useUser({ uid: ownerUid });
-    const handleClick = React.useMemo(() => openClick.bind(null, url), [url]);
+    const handleClick = React.useCallback(
+        (e) => {
+            onTrackClick();
+            openClick(url, e);
+        },
+        [url, onTrackClick]
+    );
 
     if (loading) {
         return (
@@ -265,7 +285,10 @@ export const DataDocItem: React.FunctionComponent<IDataDocItemProps> = ({
         <span
             className="result-item-description"
             dangerouslySetInnerHTML={{
-                __html: formatHighlightStrings(dataDocContent),
+                __html: DOMPurify.sanitize(
+                    formatHighlightStrings(dataDocContent),
+                    { USE_PROFILES: { html: true } }
+                ),
             }}
         />
     );
@@ -325,6 +348,9 @@ interface IDataTableItemProps {
     searchString: string;
     url: string;
     fromBoardId: number | undefined;
+    currentPage: number;
+    index: number;
+    onTrackClick: () => void;
 }
 
 export const DataTableItem: React.FunctionComponent<IDataTableItemProps> = ({
@@ -332,6 +358,7 @@ export const DataTableItem: React.FunctionComponent<IDataTableItemProps> = ({
     searchString,
     url,
     fromBoardId,
+    onTrackClick,
 }) => {
     const selfRef = useRef<HTMLDivElement>();
     const {
@@ -343,7 +370,13 @@ export const DataTableItem: React.FunctionComponent<IDataTableItemProps> = ({
         tags,
         id,
     } = preview;
-    const handleClick = React.useMemo(() => openClick.bind(null, url), [url]);
+    const handleClick = React.useCallback(
+        (e) => {
+            onTrackClick();
+            openClick(url, e);
+        },
+        [url, onTrackClick]
+    );
 
     const goldenIcon = golden ? (
         <div className="result-item-golden ml4">
@@ -355,7 +388,10 @@ export const DataTableItem: React.FunctionComponent<IDataTableItemProps> = ({
     const descriptionDOM = highlightedDescription ? (
         <span
             dangerouslySetInnerHTML={{
-                __html: formatHighlightStrings(highlightedDescription),
+                __html: DOMPurify.sanitize(
+                    formatHighlightStrings(highlightedDescription),
+                    { USE_PROFILES: { html: true } }
+                ),
             }}
         />
     ) : (
@@ -388,7 +424,11 @@ export const DataTableItem: React.FunctionComponent<IDataTableItemProps> = ({
                             />
                             {goldenIcon}
                         </div>
-                        <StyledText size="small" color="lightest">
+                        <StyledText
+                            size="small"
+                            color="lightest"
+                            className="result-item-timestamp ml8"
+                        >
                             {generateFormattedDate(createdAt, 'X')}
                         </StyledText>
                     </div>
@@ -427,11 +467,18 @@ export const BoardItem: React.FunctionComponent<{
     url: string;
     searchString: string;
     fromBoardId: number | undefined;
-}> = ({ preview, url, searchString, fromBoardId }) => {
+    onTrackClick: () => void;
+}> = ({ preview, url, searchString, fromBoardId, onTrackClick }) => {
     const selfRef = useRef<HTMLDivElement>();
     const { owner_uid: ownerUid, description, id } = preview;
     const { userInfo: ownerInfo, loading } = useUser({ uid: ownerUid });
-    const handleClick = React.useMemo(() => openClick.bind(null, url), [url]);
+    const handleClick = React.useCallback(
+        (e) => {
+            onTrackClick();
+            openClick(url, e);
+        },
+        [url, onTrackClick]
+    );
 
     if (loading) {
         return (
@@ -447,7 +494,10 @@ export const BoardItem: React.FunctionComponent<{
     const descriptionDOM = highlightedDescription ? (
         <span
             dangerouslySetInnerHTML={{
-                __html: formatHighlightStrings(highlightedDescription),
+                __html: DOMPurify.sanitize(
+                    formatHighlightStrings(highlightedDescription),
+                    { USE_PROFILES: { html: true } }
+                ),
             }}
         />
     ) : (

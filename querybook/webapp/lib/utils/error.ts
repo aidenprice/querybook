@@ -1,30 +1,23 @@
 import { AxiosError } from 'axios';
+import { isObject } from 'lodash';
 import moment from 'moment';
 
 import { formatDuration, generateFormattedDate } from './datetime';
 
+export type AxiosErrorWithMessage = AxiosError<{ error?: string }>;
 export function formatError(error: any): string {
     if (typeof error === 'string') {
         return error;
     }
 
-    const isErrorObject =
-        error != null &&
-        typeof error === 'object' &&
-        error.constructor === Error;
+    const isErrorObject = isObject(error);
     if (isErrorObject) {
         if (isAxiosError(error)) {
-            if (error.response) {
-                if (
-                    error.response.data &&
-                    typeof error.response.data === 'object'
-                ) {
-                    // The request was made and the server responded with a status code > 2xx
-                    if ('error' in error.response.data) {
-                        return error.response.data.error;
-                    }
-                }
+            if (isAxiosErrorWithMessage(error)) {
+                return error.response.data.error;
+            }
 
+            if (error.response) {
                 if (
                     error.response.status === 429 &&
                     'flask-limit-key' in error.response.headers
@@ -32,6 +25,10 @@ export function formatError(error: any): string {
                     // Rate limit error from Flask-Limiter
                     return formatRateLimitError(error.response.headers);
                 }
+            }
+
+            if (error.message) {
+                return error.message;
             }
         } else {
             // unknown error, maybe syntax?
@@ -43,6 +40,19 @@ export function formatError(error: any): string {
 
 export function isAxiosError(e: any): e is AxiosError {
     return e instanceof Error && (e as AxiosError).isAxiosError;
+}
+
+export function isAxiosErrorWithMessage(e: any): e is AxiosErrorWithMessage {
+    if (
+        isAxiosError(e) &&
+        e.response &&
+        e.response.data &&
+        typeof e.response.data === 'object' &&
+        'error' in e.response.data
+    ) {
+        return true;
+    }
+    return false;
 }
 
 function formatRateLimitError(headers: Record<string, string>) {
